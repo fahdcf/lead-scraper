@@ -1,24 +1,28 @@
-# Morocco Dentist Scraper CLI
+# 🎯 Universal Morocco Web Scraper CLI
 
-A powerful Node.js CLI tool that scrapes email addresses and phone numbers from dentist websites across Morocco using Google Custom Search API. Features fallback API keys, comprehensive logging, and one-command execution.
+A powerful Node.js CLI tool that scrapes email addresses and phone numbers from ANY business websites across Morocco using Google Custom Search API and AI-powered query generation. Features fallback API keys, comprehensive logging, and one-command execution for any niche.
 
 ## 🚀 Features
 
-- **20 Comprehensive Dentist Queries**: Covers all major Moroccan cities (Casablanca, Rabat, Marrakech, Fes, Agadir, Tangier)
+- **Universal Niche Support**: Works for ANY business type (restaurants, lawyers, dentists, hotels, etc.)
+- **AI-Powered Query Generation**: Gemini AI generates 25 targeted queries (15 French + 10 Arabic) for your specific niche
 - **Fallback API Keys System**: Automatically rotates between multiple Google API keys when quota is exceeded
-- **One-Command Execution**: Run `npm start` to scrape all 20 queries at once
+- **One-Command Execution**: Run `npm start` and enter your niche to scrape automatically
 - **Detailed Logging**: Real-time progress updates with comprehensive statistics
 - **Sequential Processing**: Processes URLs one-by-one (no parallel processing) to avoid rate limiting
 - **Smart Filtering**: Filters out irrelevant URLs and invalid emails
 - **Moroccan Phone Detection**: Extracts Moroccan phone numbers (+212 format)
 - **Multiple Export Formats**: Supports CSV and Excel output
 - **Easy Configuration**: Simple env.config file for API keys
+- **LinkedIn Profile Search**: Find professional profiles and contact information
+- **Content Validation**: Advanced filtering to ensure high-quality results
 
 ## 📋 Prerequisites
 
 - Node.js 16+ 
 - Google Custom Search API key(s)
 - Google Custom Search Engine ID
+- Gemini AI API key (for intelligent query generation)
 
 ## 🛠️ Installation
 
@@ -36,6 +40,7 @@ A powerful Node.js CLI tool that scrapes email addresses and phone numbers from 
    GOOGLE_API_KEY_2=YOUR_SECOND_API_KEY
    GOOGLE_API_KEY_3=YOUR_THIRD_API_KEY
    GOOGLE_SEARCH_ENGINE_ID=YOUR_SEARCH_ENGINE_ID
+   GEMINI_API_KEY=YOUR_GEMINI_API_KEY
    ```
 
 ## ⚙️ Configuration
@@ -52,28 +57,34 @@ GOOGLE_API_KEY_5=YOUR_FIFTH_API_KEY
 # Google Custom Search Engine ID
 GOOGLE_SEARCH_ENGINE_ID=YOUR_SEARCH_ENGINE_ID
 
+# Gemini AI API Key (for intelligent query generation)
+GEMINI_API_KEY=YOUR_GEMINI_API_KEY
+
 # Request Configuration
 REQUEST_DELAY=2000
 REQUEST_TIMEOUT=20000
 ```
 
-### Search Queries (20 Comprehensive Queries)
-The tool automatically searches for dentists across all major Moroccan cities:
-- **Casablanca**: 5 queries
-- **Rabat**: 4 queries  
-- **Marrakech**: 3 queries
-- **Fes**: 3 queries
-- **Agadir**: 2 queries
-- **Tangier**: 2 queries
-- **General Morocco**: 1 query
-
 ## 🚀 Usage
 
-### One-Command Execution (Recommended)
+### Main Scraper with Data Source Selection
 ```bash
 npm start
 ```
-This runs all 20 queries and scrapes all found URLs automatically.
+Then:
+1. Enter your niche when prompted (e.g., "website developers in Casablanca")
+2. Choose your data source:
+   - **1. Google Search** - Business websites and contact information
+   - **2. LinkedIn** - Professional profiles and networking data
+   - **3. All Sources** - Combined comprehensive search
+
+The AI will generate 25 targeted queries automatically and scrape all found URLs.
+
+### Test Scraper (Limited Queries)
+```bash
+npm run test
+```
+Same as `npm start` but with limited queries for testing purposes.
 
 ### Alternative Commands
 ```bash
@@ -83,8 +94,8 @@ npm run scrape
 # Run the main scraper
 node scraper.js
 
-# Test with single query
-npm run test
+# Use advanced scraper for better quality
+npm run advanced
 
 # Development mode with auto-restart
 npm run dev
@@ -96,7 +107,7 @@ npm run dev
 node index.js --format xlsx
 
 # Use custom search queries
-node index.js --queries "dentiste+Marrakech,clinique+Rabat"
+node index.js --queries "restaurants+Casablanca,hotels+Marrakech"
 
 # Specify output filename
 node index.js --output my-results.csv
@@ -105,21 +116,29 @@ node index.js --output my-results.csv
 ## 📁 Project Structure
 
 ```
-/morocco-dentist-scraper/
-├── scraper.js              # Main scraper (runs all 20 queries)
+/universal-morocco-scraper/
+├── scraper.js              # Main scraper (AI-powered queries)
+├── advanced-scraper.js     # Enhanced scraper with quality metrics
 ├── index.js                # Legacy scraper with CLI options
+├── test-scraper.js         # Test scraper with data source selection
 ├── config.js               # Configuration with env loading
 ├── env.config              # Environment variables (API keys)
 ├── package.json            # Dependencies and scripts
 ├── README.md               # This file
+├── BETTER_RESULTS_GUIDE.md # Detailed improvement guide
 ├── helpers/
 │   ├── fetchPage.js        # Fetch HTML content from URLs
 │   ├── extractEmails.js    # Extract and validate email addresses
 │   ├── extractPhones.js    # Extract Moroccan phone numbers
 │   ├── googleSearch.js     # Google API with fallback keys
-│   └── exportToCsv.js      # Export results to CSV/Excel
-├── morocco-dentists-results.csv    # Default output file
-└── morocco-dentists-results.xlsx   # Excel output file
+│   ├── exportToCsv.js      # Export results to CSV/Excel
+│   ├── geminiAI.js         # AI-powered query generation
+│   ├── multiSourceSearch.js # LinkedIn and multi-source search
+│   └── contentValidator.js # Content validation and filtering
+└── results/                # Output files
+    ├── restaurants_results.csv
+    ├── lawyers_results.csv
+    └── dentists_results.csv
 ```
 
 ## 🔧 Advanced Configuration
@@ -131,17 +150,7 @@ GOOGLE_API_KEY_6=YOUR_SIXTH_API_KEY
 GOOGLE_API_KEY_7=YOUR_SEVENTH_API_KEY
 ```
 
-### Modifying Search Queries
-Edit the `searchQueries` array in `config.js`:
-```javascript
-searchQueries: [
-  "your+custom+query+1",
-  "your+custom+query+2",
-  // ... more queries
-]
-```
-
-### Adjusting Request Delays
+### Modifying Request Delays
 Modify `REQUEST_DELAY` in `env.config`:
 ```bash
 REQUEST_DELAY=3000  # 3 seconds between requests
@@ -157,24 +166,23 @@ REQUEST_DELAY=3000  # 3 seconds between requests
 
 ### Console Output Example
 ```
-🚀 Morocco Dentist Scraper Starting...
+🚀 Universal Morocco Scraper Starting...
 
-📋 Configuration:
-   • API Keys: 3 available
-   • Search Queries: 20 configured
-   • Request Delay: 2000ms
-   • Max Results per Query: 10
+🎯 Enter your niche: restaurants in Casablanca
 
-🔍 Starting scraping of 20 queries...
+🤖 Generating AI-powered search queries...
+✅ Generated 25 AI-powered queries
 
-📊 Query 1/20: "dentiste+Casablanca"
+📋 Processing 25 enhanced queries...
+
+📊 Query 1/25: "restaurants+Casablanca+contact"
 ────────────────────────────────────────────────────────────
    ✅ Found 8 relevant URLs
-   ✅ Completed query "dentiste+Casablanca" - Scraped 8 URLs
+   ✅ Completed query "restaurants+Casablanca+contact" - Scraped 8 URLs
    🔑 Using API key 1/3
 
 📈 Final Scraping Summary:
-   • Queries Processed: 20/20
+   • Queries Processed: 25/25
    • Failed Queries: 0
    • Total URLs Found: 156
    • Total URLs Scraped: 142
@@ -183,8 +191,8 @@ REQUEST_DELAY=3000  # 3 seconds between requests
    • Unique Phones Found: 67
    • Final Results: 67 rows
 
-✅ Morocco Dentist Scraping completed successfully!
-📁 Results saved to: morocco-dentists-results.csv
+✅ Universal scraping completed successfully!
+📁 Results saved to: restaurants_in_casablanca_results.csv
 ```
 
 ## ⚠️ Important Notes
@@ -195,6 +203,8 @@ REQUEST_DELAY=3000  # 3 seconds between requests
 4. **Sequential Processing**: URLs are processed one at a time (no parallel processing)
 5. **Error Handling**: Failed requests are logged but don't stop the process
 6. **Deduplication**: Emails are automatically deduplicated and converted to lowercase
+7. **AI-Powered**: Uses Gemini AI to generate niche-specific queries automatically
+8. **Content Validation**: Advanced filtering ensures high-quality, relevant results
 
 ## 🐛 Troubleshooting
 
@@ -204,6 +214,7 @@ REQUEST_DELAY=3000  # 3 seconds between requests
 2. **Search Engine ID Error**: Verify your Custom Search Engine ID is correct
 3. **Quota Exceeded**: The tool will automatically rotate to the next API key
 4. **Network Errors**: Check your internet connection and firewall settings
+5. **AI Generation Failed**: Falls back to generic queries if Gemini AI is unavailable
 
 ### Getting More API Keys
 1. Go to [Google Cloud Console](https://console.cloud.google.com/)

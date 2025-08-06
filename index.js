@@ -23,6 +23,41 @@ program
 
 const options = program.opts();
 
+// Global state for interruption handling
+let isProcessing = false;
+let currentResults = [];
+let currentNiche = '';
+let currentDataType = '';
+
+// Handle interruption (Ctrl+C)
+process.on('SIGINT', async () => {
+  console.log('\n⚠️  Interruption detected. Saving partial results...');
+  
+  if (isProcessing && currentResults.length > 0) {
+    try {
+      if (currentDataType === 'linkedin') {
+        // Save LinkedIn partial results
+        console.log(`💾 Saving ${currentResults.length} LinkedIn profiles...`);
+        const filename = await exportLinkedInToExcel(currentResults, currentNiche);
+        console.log(`✅ LinkedIn partial results saved to: ${filename}`);
+      } else {
+        // Save Google Search partial results
+        console.log(`💾 Saving ${currentResults.length} validated results...`);
+        const timestamp = Date.now();
+        const filename = `${currentNiche.replace(/[^a-zA-Z0-9]/g, '_')}_results_partial_${timestamp}.csv`;
+        await exportToCsv(currentResults, filename);
+        console.log(`✅ Partial results saved to: ${filename}`);
+      }
+      console.log('✅ Partial results saved successfully!');
+    } catch (error) {
+      console.error(`❌ Error saving partial results: ${error.message}`);
+    }
+  }
+  
+  console.log('Cleaning up...');
+  process.exit(0);
+});
+
 /**
  * Main scraping function
  */

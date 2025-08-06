@@ -1,7 +1,7 @@
 import { config } from '../config.js';
 
 /**
- * Extract email addresses from HTML content
+ * Extract email addresses from HTML content with enhanced patterns
  * @param {string} html - HTML content to search
  * @returns {string[]} - Array of unique valid email addresses
  */
@@ -10,16 +10,75 @@ export function extractEmails(html) {
     return [];
   }
 
-  // Email regex pattern (same as n8n workflow)
-  const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(?!png|jpg|gif|jpeg)[a-zA-Z]{2,}/gi;
+  // Enhanced email regex patterns to catch more variations
+  const emailPatterns = [
+    // Standard email pattern
+    /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(?!png|jpg|gif|jpeg|svg|webp)[a-zA-Z]{2,}/gi,
+    
+    // Email with spaces (common in contact forms)
+    /[a-zA-Z0-9._%+-]+\s*@\s*[a-zA-Z0-9.-]+\s*\.\s*(?!png|jpg|gif|jpeg|svg|webp)[a-zA-Z]{2,}/gi,
+    
+    // Email with [at] and [dot] obfuscation
+    /[a-zA-Z0-9._%+-]+\s*\[at\]\s*[a-zA-Z0-9.-]+\s*\[dot\]\s*[a-zA-Z]{2,}/gi,
+    
+    // Email with (at) and (dot) obfuscation
+    /[a-zA-Z0-9._%+-]+\s*\(at\)\s*[a-zA-Z0-9.-]+\s*\(dot\)\s*[a-zA-Z]{2,}/gi,
+    
+    // Email in mailto: links
+    /mailto:([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi,
+    
+    // Email in contact forms (data attributes)
+    /data-email="([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})"/gi,
+    
+    // Email in JSON-like structures
+    /"email"\s*:\s*"([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})"/gi,
+    
+    // Email in script tags (common in contact forms)
+    /emailAddress\s*[:=]\s*["']([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})["']/gi
+  ];
   
-  const matches = html.match(emailRegex) || [];
-  const uniqueEmails = [...new Set(matches)];
+  const allEmails = new Set();
   
-  // Filter out invalid emails and excluded domains
-  const validEmails = uniqueEmails.filter(email => isValidEmail(email));
+  // Extract emails using all patterns
+  emailPatterns.forEach(pattern => {
+    const matches = html.match(pattern) || [];
+    matches.forEach(match => {
+      // Clean up the email (remove mailto:, data attributes, etc.)
+      let cleanEmail = match;
+      if (match.startsWith('mailto:')) {
+        cleanEmail = match.replace('mailto:', '');
+      } else if (match.includes('data-email="')) {
+        cleanEmail = match.match(/data-email="([^"]+)"/)?.[1] || match;
+      } else if (match.includes('"email"')) {
+        cleanEmail = match.match(/"email"\s*:\s*"([^"]+)"/)?.[1] || match;
+      } else if (match.includes('emailAddress')) {
+        cleanEmail = match.match(/emailAddress\s*[:=]\s*["']([^"']+)["']/)?.[1] || match;
+      }
+      
+      // Handle obfuscated emails
+      if (cleanEmail.includes('[at]')) {
+        cleanEmail = cleanEmail.replace(/\s*\[at\]\s*/g, '@');
+      }
+      if (cleanEmail.includes('(at)')) {
+        cleanEmail = cleanEmail.replace(/\s*\(at\)\s*/g, '@');
+      }
+      if (cleanEmail.includes('[dot]')) {
+        cleanEmail = cleanEmail.replace(/\s*\[dot\]\s*/g, '.');
+      }
+      if (cleanEmail.includes('(dot)')) {
+        cleanEmail = cleanEmail.replace(/\s*\(dot\)\s*/g, '.');
+      }
+      
+      // Remove extra spaces
+      cleanEmail = cleanEmail.replace(/\s+/g, '');
+      
+      if (isValidEmail(cleanEmail)) {
+        allEmails.add(cleanEmail.toLowerCase());
+      }
+    });
+  });
   
-  return validEmails;
+  return Array.from(allEmails);
 }
 
 /**
@@ -32,7 +91,7 @@ function isValidEmail(email) {
     return false;
   }
 
-  // Basic email validation regex
+  // Enhanced email validation regex
   const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
   
   if (!emailRegex.test(email)) {
@@ -41,6 +100,20 @@ function isValidEmail(email) {
 
   // Check against excluded patterns
   for (const pattern of config.excludedEmailPatterns) {
+    if (pattern.test(email)) {
+      return false;
+    }
+  }
+
+  // Additional validation: check for common invalid patterns
+  const invalidPatterns = [
+    /^[0-9]+@/, // Email starting with numbers only
+    /@[0-9]+\.[a-zA-Z]+$/, // Domain with only numbers
+    /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{1}$/, // Single letter TLD
+    /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\.[a-zA-Z]{2,}$/, // Double TLD
+  ];
+  
+  for (const pattern of invalidPatterns) {
     if (pattern.test(email)) {
       return false;
     }

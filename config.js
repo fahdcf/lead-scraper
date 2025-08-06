@@ -21,20 +21,49 @@ async function loadEnvConfig() {
   }
 }
 
-// Get API keys from environment
+// Get API keys from environment - now supports unlimited keys
 function getApiKeys(envVars) {
   const keys = [];
-  for (let i = 1; i <= 5; i++) {
+  
+  // Check for numbered keys (GOOGLE_API_KEY_1, GOOGLE_API_KEY_2, etc.)
+  let i = 1;
+  while (true) {
     const key = envVars[`GOOGLE_API_KEY_${i}`];
+    if (!key) break; // Stop when no more keys found
+    
     if (key && 
         key !== 'YOUR_SECOND_API_KEY_HERE' && 
         key !== 'YOUR_THIRD_API_KEY_HERE' && 
         key !== 'YOUR_FOURTH_API_KEY_HERE' && 
         key !== 'YOUR_FIFTH_API_KEY_HERE' &&
+        key !== 'YOUR_SIXTH_API_KEY_HERE' &&
+        key !== 'YOUR_SEVENTH_API_KEY_HERE' &&
+        key !== 'YOUR_EIGHTH_API_KEY_HERE' &&
+        key !== 'YOUR_NINTH_API_KEY_HERE' &&
+        key !== 'YOUR_TENTH_API_KEY_HERE' &&
         key.length > 20) { // Basic validation - API keys are usually long
       keys.push(key);
     }
+    i++;
   }
+  
+  // Also check for alternative naming patterns
+  const alternativePatterns = [
+    'GOOGLE_API_KEY_A', 'GOOGLE_API_KEY_B', 'GOOGLE_API_KEY_C',
+    'GOOGLE_API_KEY_PRIMARY', 'GOOGLE_API_KEY_SECONDARY', 'GOOGLE_API_KEY_BACKUP',
+    'GOOGLE_API_KEY_MAIN', 'GOOGLE_API_KEY_ALT1', 'GOOGLE_API_KEY_ALT2'
+  ];
+  
+  for (const pattern of alternativePatterns) {
+    const key = envVars[pattern];
+    if (key && 
+        !key.includes('YOUR_') && 
+        !key.includes('PLACEHOLDER') &&
+        key.length > 20) {
+      keys.push(key);
+    }
+  }
+  
   return keys;
 }
 
@@ -49,6 +78,13 @@ export const config = {
     currentKeyIndex: 0
   },
 
+  // Gemini AI Configuration
+  gemini: {
+    apiKey: null, // Will be populated from env.config
+    baseUrl: "https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent",
+    model: "gemini-2.5-flash"
+  },
+
   // HTTP Request Configuration
   http: {
     timeout: 20000,
@@ -57,79 +93,113 @@ export const config = {
     delayBetweenRequests: 2000 // 2 seconds delay between requests
   },
 
-  // 20 Dentist Search Queries for Morocco (Comprehensive Coverage)
+  // Generic Search Query Templates for Any Niche (AI-Powered)
+  // These are fallback templates - the main system uses Gemini AI to generate niche-specific queries
   searchQueries: [
-    // Casablanca
-    "dentiste+Casablanca",
-    "clinique+dentaire+Casablanca",
-    "meilleur+dentiste+Casablanca",
-    "urgence+dentaire+Casablanca",
-    "dentiste+esthétique+Casablanca",
-    
-    // Rabat
-    "dentiste+Rabat",
-    "clinique+dentaire+Rabat",
-    "cabinet+dentaire+Rabat",
-    "dentiste+urgence+Rabat",
-    
-    // Marrakech
-    "dentiste+Marrakech",
-    "clinique+dentaire+Marrakech",
-    "cabinet+dentaire+Marrakech",
-    
-    // Fes
-    "dentiste+Fes",
-    "clinique+dentaire+Fes",
-    "cabinet+dentaire+Fes",
-    
-    // Agadir
-    "dentiste+Agadir",
-    "clinique+dentaire+Agadir",
-    
-    // Tangier
-    "dentiste+Tanger",
-    "clinique+dentaire+Tanger",
-    
-    // General Morocco
-    "dentiste+Maroc",
-    "clinique+dentaire+Maroc"
+    // Generic business templates (used as fallback if AI fails)
+    "business+contact+Morocco",
+    "company+services+Maroc",
+    "professional+services+contact",
+    "business+directory+Morocco",
+    "company+information+Maroc"
   ],
 
   // URL Filtering - Domains to exclude
   excludedDomains: [
-    "google.com",
-    "gstatic.com", 
-    "ggpht.com",
-    "schema.org",
-    "example.com",
-    "sentry-next.wixpress.com",
-    "imli.com",
-    "sentry.wixpress.com",
-    "ingest.sentry.io",
-    "sentry.io",
-    "reddit.com",
-    "wikipedia.org",
-    "facebook.com",
-    "youtube.com",
-    "twitter.com",
-    "instagram.com"
+    // Social media and content platforms
+    "google.com", "gstatic.com", "ggpht.com", "schema.org",
+    "facebook.com", "youtube.com", "twitter.com", "instagram.com",
+    "linkedin.com", "tiktok.com", "snapchat.com", "pinterest.com",
+    "reddit.com", "wikipedia.org", "quora.com", "medium.com",
+    
+    // E-commerce and marketplace
+    "amazon.com", "amazon.ma", "ebay.com", "etsy.com",
+    "aliexpress.com", "wish.com", "shopify.com",
+    
+    // News and media
+    "bbc.com", "cnn.com", "reuters.com", "bloomberg.com",
+    "lemonde.fr", "lefigaro.fr", "maroc.ma", "2m.ma",
+    
+    // Technology and services
+    "microsoft.com", "apple.com", "adobe.com", "salesforce.com",
+    "hubspot.com", "mailchimp.com", "zendesk.com", "intercom.com",
+    
+    // Analytics and tracking
+    "google-analytics.com", "googletagmanager.com", "facebook.net",
+    "doubleclick.net", "googlesyndication.com", "googleadservices.com",
+    
+    // CDN and hosting
+    "cloudflare.com", "akamai.com", "fastly.com", "aws.amazon.com",
+    "heroku.com", "netlify.com", "vercel.com", "github.com",
+    
+    // Generic and spam domains
+    "example.com", "test.com", "localhost", "127.0.0.1",
+    "sentry.io", "sentry.wixpress.com", "sentry-next.wixpress.com",
+    "ingest.sentry.io", "imli.com",
+    
+    // Moroccan government and official
+    "gov.ma", "maroc.ma", "service-public.ma", "cnss.ma",
+    "cnss.gov.ma", "dgss.gov.ma", "adii.gov.ma",
+    
+    // Job boards and recruitment
+    "indeed.com", "monster.com", "glassdoor.com", "reed.co.uk",
+    "emploi.ma", "marocannonces.com", "avito.ma",
+    
+    // Educational institutions
+    "edu.ma", "ac.ma", "um5.ac.ma", "ucd.ac.ma", "usmba.ac.ma"
   ],
 
-  // Email Filtering - Keywords to exclude in email domains
+  // Priority domains for better quality leads (Moroccan business domains)
+  priorityDomains: [
+    ".ma", ".co.ma", ".com.ma", ".net.ma", ".org.ma",
+    "maroc", "morocco", "casablanca", "rabat", "marrakech",
+    "fes", "agadir", "tanger", "tanger", "meknes", "oujda",
+    "tetouan", "eljadida", "safi", "kenitra", "temara"
+  ],
+
+  // Enhanced email filtering - Keywords to exclude in email domains
   excludedEmailPatterns: [
-    /@.*(google|gstatic|ggpht|schema\.org|example\.com|sentry\.wixpress\.com|sentry-next\.wixp.*|ingest\.sentry\.io|sentry\.io|imli\.com)/i,
-    /reddit/i,
-    /wikipedia/i,
-    /facebook/i,
-    /youtube/i,
-    /twitter/i,
-    /instagram/i
+    // Social media and content platforms
+    /@.*(google|gstatic|ggpht|schema\.org|facebook|youtube|twitter|instagram|linkedin|tiktok|snapchat|pinterest|reddit|wikipedia|quora|medium)/i,
+    
+    // E-commerce and marketplace
+    /@.*(amazon|ebay|etsy|aliexpress|wish|shopify)/i,
+    
+    // News and media
+    /@.*(bbc|cnn|reuters|bloomberg|lemonde|lefigaro|2m)/i,
+    
+    // Technology and services
+    /@.*(microsoft|apple|adobe|salesforce|hubspot|mailchimp|zendesk|intercom)/i,
+    
+    // Analytics and tracking
+    /@.*(google-analytics|googletagmanager|facebook\.net|doubleclick|googlesyndication|googleadservices)/i,
+    
+    // CDN and hosting
+    /@.*(cloudflare|akamai|fastly|aws|heroku|netlify|vercel|github)/i,
+    
+    // Generic and spam domains
+    /@.*(example|test|localhost|sentry|imli)/i,
+    
+    // Government and official
+    /@.*(gov\.ma|maroc\.ma|service-public\.ma|cnss|dgss|adii)/i,
+    
+    // Job boards and recruitment
+    /@.*(indeed|monster|glassdoor|reed|emploi|marocannonces|avito)/i,
+    
+    // Educational institutions
+    /@.*(edu\.ma|ac\.ma|um5|ucd|usmba)/i,
+    
+    // Common spam patterns
+    /@.*(noreply|no-reply|donotreply|donot-reply|info|contact|support|help|admin|webmaster|postmaster)/i,
+    
+    // Temporary and disposable emails
+    /@.*(temp|disposable|throwaway|10minutemail|guerrillamail|mailinator|tempmail)/i
   ],
 
   // Output Configuration
   output: {
-    csvFile: "morocco-dentists-results.csv",
-    xlsxFile: "morocco-dentists-results.xlsx",
+    csvFile: "morocco-business-results.csv",
+    xlsxFile: "morocco-business-results.xlsx",
     defaultFormat: "csv" // "csv" or "xlsx"
   }
 };
@@ -148,6 +218,14 @@ export async function initializeConfig() {
   // Set search engine ID
   if (envVars.GOOGLE_SEARCH_ENGINE_ID) {
     config.googleSearch.searchEngineId = envVars.GOOGLE_SEARCH_ENGINE_ID;
+  }
+  
+  // Set Gemini API key for AI query generation
+  if (envVars.GEMINI_API_KEY && envVars.GEMINI_API_KEY !== 'YOUR_GEMINI_API_KEY_HERE') {
+    config.gemini.apiKey = envVars.GEMINI_API_KEY;
+    console.log(`🤖 Gemini AI API key loaded`);
+  } else {
+    console.log(`⚠️  Gemini AI API key not configured - AI query generation will use fallback queries`);
   }
   
   // Set request delay
