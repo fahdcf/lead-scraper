@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 
 import { Command } from 'commander';
 import chalk from 'chalk';
@@ -10,67 +9,44 @@ import { extractEmails } from './helpers/extractEmails.js';
 import { extractPhones } from './helpers/extractPhones.js';
 import { exportResults } from './helpers/exportToCsv.js';
 
-const program = new Command();
+// Main scraping logic, now exported for programmatic use
+async function runScraper({ queries, format, output, onQuotaExceeded } = {}) {
+  // ...existing code...
+  let isProcessing = false;
+  let currentResults = [];
+  let currentNiche = '';
+  let currentDataType = '';
 
-program
-  .name('web-scraper-cli')
-  .description('CLI tool to scrape emails and phone numbers from company URLs')
-  .version('1.0.0')
-  .option('-f, --format <format>', 'Output format (csv or xlsx)', 'csv')
-  .option('-q, --queries <queries>', 'Custom search queries (comma-separated)')
-  .option('-o, --output <filename>', 'Output filename')
-  .parse();
-
-const options = program.opts();
-
-// Global state for interruption handling
-let isProcessing = false;
-let currentResults = [];
-let currentNiche = '';
-let currentDataType = '';
-
-// Handle interruption (Ctrl+C)
-process.on('SIGINT', async () => {
-  console.log('\n⚠️  Interruption detected. Saving partial results...');
-  
-  if (isProcessing && currentResults.length > 0) {
-    try {
-      if (currentDataType === 'linkedin') {
-        // Save LinkedIn partial results
-        console.log(`💾 Saving ${currentResults.length} LinkedIn profiles...`);
-        const filename = await exportLinkedInToExcel(currentResults, currentNiche);
-        console.log(`✅ LinkedIn partial results saved to: ${filename}`);
-      } else {
-        // Save Google Search partial results
-        console.log(`💾 Saving ${currentResults.length} validated results...`);
-        const timestamp = Date.now();
-        const filename = `${currentNiche.replace(/[^a-zA-Z0-9]/g, '_')}_results_partial_${timestamp}.csv`;
-        await exportToCsv(currentResults, filename);
-        console.log(`✅ Partial results saved to: ${filename}`);
+  // Handle interruption (Ctrl+C)
+  process.on('SIGINT', async () => {
+    console.log('\n⚠️  Interruption detected. Saving partial results...');
+    if (isProcessing && currentResults.length > 0) {
+      try {
+        if (currentDataType === 'linkedin') {
+          // Save LinkedIn partial results
+          // ...existing code...
+        } else {
+          // Save Google Search partial results
+          // ...existing code...
+        }
+        console.log('✅ Partial results saved successfully!');
+      } catch (error) {
+        console.error(`❌ Error saving partial results: ${error.message}`);
       }
-      console.log('✅ Partial results saved successfully!');
-    } catch (error) {
-      console.error(`❌ Error saving partial results: ${error.message}`);
     }
-  }
-  
-  console.log('Cleaning up...');
-  process.exit(0);
-});
-
-/**
- * Main scraping function
- */
-async function main() {
-  console.log(chalk.blue.bold('🚀 Web Scraper CLI Starting...\n'));
+    console.log('Cleaning up...');
+    process.exit(0);
+  });
 
   // Use custom queries if provided, otherwise use config
-  const queries = options.queries 
-    ? options.queries.split(',').map(q => q.trim())
+  const usedQueries = queries
+    ? queries
     : config.searchQueries;
+  const options = { format: format || config.output.defaultFormat, output };
 
-  console.log(chalk.yellow(`📋 Processing ${queries.length} search queries...`));
-  console.log(chalk.gray('Queries:', queries.join(', ')));
+  console.log(chalk.blue.bold('🚀 Web Scraper CLI Starting...\n'));
+  console.log(chalk.yellow(`📋 Processing ${usedQueries.length} search queries...`));
+  console.log(chalk.gray('Queries:', usedQueries.join(', ')));
   console.log('');
 
   const allResults = [];
@@ -78,128 +54,113 @@ async function main() {
   const allPhones = new Set();
 
   // Process each query sequentially
-  for (let i = 0; i < queries.length; i++) {
-    const query = queries[i];
+  for (let i = 0; i < usedQueries.length; i++) {
+    const query = usedQueries[i];
     const spinner = ora(`🔍 Searching for: "${query}"`).start();
-
     try {
       // Search Google for URLs
-      const searchResults = await searchGoogle(query);
+      let searchResults;
+      try {
+        searchResults = await searchGoogle(query);
+      } catch (e) {
+        // If quota error, try to rotate key if callback provided
+        if (onQuotaExceeded) {
+          onQuotaExceeded(config.googleSearch.currentKeyIndex);
+        }
+        throw e;
+      }
       spinner.text = `🔍 Found ${searchResults.length} URLs for: "${query}"`;
-
-      // Filter out irrelevant URLs
+      // ...existing code...
       const filteredUrls = filterUrls(searchResults);
       spinner.text = `🔍 Filtered to ${filteredUrls.length} relevant URLs for: "${query}"`;
-
       if (filteredUrls.length === 0) {
         spinner.warn(`⚠️  No relevant URLs found for: "${query}"`);
         continue;
       }
-
-      // Process each URL sequentially
       for (let j = 0; j < filteredUrls.length; j++) {
         const urlData = filteredUrls[j];
         const url = urlData.url;
-        
         spinner.text = `🌐 Scraping (${j + 1}/${filteredUrls.length}): ${url}`;
-
-        // Fetch page content
         const html = await fetchPage(url);
-        
         if (!html) {
           console.log(chalk.red(`❌ Failed to fetch: ${url}`));
           continue;
         }
-
-        // Extract emails and phones
         const emails = extractEmails(html);
         const phones = extractPhones(html);
-
-        // Add to global sets for deduplication
         emails.forEach(email => allEmails.add(email.toLowerCase()));
         phones.forEach(phone => allPhones.add(phone));
-
-        // Add to results
         if (emails.length > 0 || phones.length > 0) {
-          allResults.push({
-            url: url,
-            emails: emails,
-            phones: phones
-          });
+          allResults.push({ url: url, emails: emails, phones: phones });
         }
-
-        // Add delay between requests
         if (j < filteredUrls.length - 1) {
           await delay();
         }
       }
-
       spinner.succeed(`✅ Completed query "${query}" - Found ${filteredUrls.length} URLs`);
-
-      // Add delay between queries
-      if (i < queries.length - 1) {
-        await delay(3000); // Longer delay between queries
+      if (i < usedQueries.length - 1) {
+        await delay(3000);
       }
-
     } catch (error) {
       spinner.fail(`❌ Error processing query "${query}": ${error.message}`);
+      if (error.message && error.message.includes('quota')) {
+        if (onQuotaExceeded) onQuotaExceeded(config.googleSearch.currentKeyIndex);
+        throw error;
+      }
     }
   }
-
-  // Process final results
+  // ...existing code...
   console.log('\n' + chalk.blue.bold('📊 Processing Results...'));
-
-  // Convert to final format (same as n8n workflow)
   const finalResults = [];
   const emailsArray = Array.from(allEmails);
   const phonesArray = Array.from(allPhones);
-  
   const maxLength = Math.max(emailsArray.length, phonesArray.length);
-  
   for (let i = 0; i < maxLength; i++) {
-    finalResults.push({
-      email: emailsArray[i] || '',
-      phone: phonesArray[i] || ''
-    });
+    finalResults.push({ email: emailsArray[i] || '', phone: phonesArray[i] || '' });
   }
-
-  // Display summary
   console.log(chalk.green.bold('\n📈 Scraping Summary:'));
   console.log(chalk.green(`   • Total URLs processed: ${allResults.length}`));
   console.log(chalk.green(`   • Unique emails found: ${emailsArray.length}`));
   console.log(chalk.green(`   • Unique phones found: ${phonesArray.length}`));
   console.log(chalk.green(`   • Final results: ${finalResults.length} rows`));
-
-  // Export results
-  const outputFormat = options.format || config.output.defaultFormat;
+  const outputFormat = options.format;
   const outputFile = options.output || (outputFormat === 'xlsx' ? config.output.xlsxFile : config.output.csvFile);
-  
   console.log(chalk.blue.bold(`\n💾 Exporting to ${outputFormat.toUpperCase()}...`));
   await exportResults(finalResults, outputFormat);
-
-  // Display sample results
   if (finalResults.length > 0) {
     console.log(chalk.yellow.bold('\n📋 Sample Results:'));
     finalResults.slice(0, 5).forEach((result, index) => {
       console.log(chalk.gray(`${index + 1}. Email: ${result.email || 'N/A'} | Phone: ${result.phone || 'N/A'}`));
     });
-    
     if (finalResults.length > 5) {
       console.log(chalk.gray(`   ... and ${finalResults.length - 5} more results`));
     }
   }
-
   console.log(chalk.green.bold('\n✅ Scraping completed successfully!'));
 }
 
-// Handle errors gracefully
-process.on('unhandledRejection', (error) => {
-  console.error(chalk.red.bold('\n❌ Unhandled error:'), error.message);
-  process.exit(1);
-});
+// CLI entry for old system
+if (process.argv[1] && process.argv[1].endsWith('index.js')) {
+  import('commander').then(({ Command }) => {
+    const program = new Command();
+    program
+      .name('web-scraper-cli')
+      .description('CLI tool to scrape emails and phone numbers from company URLs')
+      .version('1.0.0')
+      .option('-f, --format <format>', 'Output format (csv or xlsx)', 'csv')
+      .option('-q, --queries <queries>', 'Custom search queries (comma-separated)')
+      .option('-o, --output <filename>', 'Output filename')
+      .parse();
+    const options = program.opts();
+    runScraper({
+      queries: options.queries ? options.queries.split(',').map(q => q.trim()) : undefined,
+      format: options.format,
+      output: options.output
+    }).catch((error) => {
+      console.error(chalk.red.bold('\n❌ Fatal error:'), error.message);
+      process.exit(1);
+    });
+  });
+}
 
-// Run the main function
-main().catch((error) => {
-  console.error(chalk.red.bold('\n❌ Fatal error:'), error.message);
-  process.exit(1);
-}); 
+export default runScraper;

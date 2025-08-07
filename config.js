@@ -207,12 +207,13 @@ export const config = {
 // Initialize configuration with environment variables
 export async function initializeConfig() {
   const envVars = await loadEnvConfig();
-  
-  // Set API keys
-  config.googleSearch.apiKeys = getApiKeys(envVars);
-  if (config.googleSearch.apiKeys.length === 0) {
-    // Fallback to default key if no env keys
-    config.googleSearch.apiKeys = ["AIzaSyDB34zBGAHN4S-RxBKqlAX7UxuyIMWE-iM"];
+  // Only set API keys from env if not already set (e.g. by start.js)
+  if (!config.googleSearch.apiKeys || config.googleSearch.apiKeys.length === 0) {
+    config.googleSearch.apiKeys = getApiKeys(envVars);
+    if (config.googleSearch.apiKeys.length === 0) {
+      // Fallback to default key if no env keys
+      config.googleSearch.apiKeys = ["AIzaSyDB34zBGAHN4S-RxBKqlAX7UxuyIMWE-iM"];
+    }
   }
   
   // Set search engine ID

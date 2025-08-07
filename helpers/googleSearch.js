@@ -25,7 +25,8 @@ function rotateApiKey() {
  * @param {number} maxResults - Maximum number of results to return (default: 10)
  * @returns {Promise<Array>} - Array of search results with URLs
  */
-export async function searchGoogle(query, maxResults = 10) {
+// Add startIndex param for paging
+export async function searchGoogle(query, maxResults = 10, startIndexOverride = null) {
   const maxRetries = config.googleSearch.apiKeys.length;
   const resultsPerPage = 10; // Google API max per page
   const totalPages = Math.ceil(maxResults / resultsPerPage);
@@ -34,11 +35,31 @@ export async function searchGoogle(query, maxResults = 10) {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       const apiKey = getCurrentApiKey();
-      
-      // Search multiple pages
+      // If startIndexOverride is set, only fetch that page
+      if (startIndexOverride !== null) {
+        const params = new URLSearchParams({
+          key: apiKey,
+          cx: config.googleSearch.searchEngineId,
+          q: query,
+          num: resultsPerPage,
+          start: startIndexOverride
+        });
+        const response = await axios.get(`${config.googleSearch.baseUrl}?${params}`, {
+          timeout: 10000
+        });
+        if (response.data && response.data.items) {
+          const pageResults = response.data.items.map(item => ({
+            url: item.link,
+            title: item.title,
+            snippet: item.snippet
+          }));
+          allResults = allResults.concat(pageResults);
+        }
+        return allResults.slice(0, maxResults);
+      }
+      // Search multiple pages (default behavior)
       for (let page = 0; page < totalPages; page++) {
         const startIndex = page * resultsPerPage + 1;
-        
         const params = new URLSearchParams({
           key: apiKey,
           cx: config.googleSearch.searchEngineId,
@@ -46,37 +67,27 @@ export async function searchGoogle(query, maxResults = 10) {
           num: resultsPerPage,
           start: startIndex
         });
-
         const response = await axios.get(`${config.googleSearch.baseUrl}?${params}`, {
           timeout: 10000
         });
-
         if (response.data && response.data.items) {
           const pageResults = response.data.items.map(item => ({
             url: item.link,
             title: item.title,
             snippet: item.snippet
           }));
-          
           allResults = allResults.concat(pageResults);
-          
-          // If we got fewer results than expected, we've reached the end
           if (response.data.items.length < resultsPerPage) {
             break;
           }
         } else {
-          break; // No more results
+          break;
         }
-        
-        // Add small delay between pages to avoid rate limiting
         if (page < totalPages - 1) {
           await new Promise(resolve => setTimeout(resolve, 1000));
         }
       }
-      
-      // Return up to maxResults
       return allResults.slice(0, maxResults);
-      
     } catch (error) {
       // Check if it's a quota exceeded error (403) or rate limit (429)
       if (error.response && (error.response.status === 403 || error.response.status === 429)) {

@@ -52,50 +52,50 @@ async function safeDelay(ms, reason = 'Rate limiting') {
 export async function searchLinkedIn(query, niche, onProfileAdded = null) {
   try {
     console.log(`🔒 Starting safe LinkedIn search for: "${query}"`);
-    
     // Enhanced query to find LinkedIn profiles
     const enhancedQuery = `${query} site:linkedin.com/company/ OR site:linkedin.com/in/`;
-    
     console.log(`🔒 Starting safe Google search for: "${enhancedQuery}" (linkedin)`);
-    
     // Add delay to avoid rate limiting
     const delay = Math.floor(Math.random() * 4000) + 3000;
     console.log(`⏳ Pre-search delay: Waiting ${delay}ms...`);
     await new Promise(resolve => setTimeout(resolve, delay));
-    
-    // Search for 2 pages (20 results) instead of 1 page (10 results)
-    const searchResults = await searchGoogle(enhancedQuery, 20);
-    
+
+    let searchResults = [];
+    if (config._userBasedFlow) {
+      // User-based: fetch 2 pages (20 results)
+      for (let start = 1; start <= 2; start++) {
+        const pageResults = await searchGoogle(enhancedQuery, 10, (start - 1) * 10 + 1);
+        if (Array.isArray(pageResults)) searchResults.push(...pageResults);
+      }
+    } else {
+      // Global: fetch 1 page (10 results)
+      searchResults = await searchGoogle(enhancedQuery, 10);
+    }
+
     if (searchResults.length === 0) {
       console.log(`⚠️  No search results found for: "${enhancedQuery}"`);
       return [];
     }
-    
+
     console.log(`✅ Found ${searchResults.length} search results for: "${enhancedQuery}"`);
-    
+
     const linkedInProfiles = [];
-    
     // Process each search result
     for (let i = 0; i < searchResults.length; i++) {
       const result = searchResults[i];
-      
       console.log(`🔍 Processing result ${i + 1}: ${result.url || result.link}`);
-      
       // Add delay between profile processing
       if (i > 0) {
         const profileDelay = Math.floor(Math.random() * 4000) + 3000;
         console.log(`⏳ Between LinkedIn profile processing: Waiting ${profileDelay}ms...`);
         await new Promise(resolve => setTimeout(resolve, profileDelay));
       }
-      
       try {
         // Extract LinkedIn profile info
         const profileInfo = await extractLinkedInProfileInfo(result.url || result.link, result.title, result.snippet, niche);
-        
         if (profileInfo) {
           linkedInProfiles.push(profileInfo);
           console.log(`✅ Added profile: ${profileInfo.name}`);
-          
           // Notify parent about new profile for interruption handling
           if (onProfileAdded) {
             onProfileAdded(profileInfo);
@@ -103,16 +103,13 @@ export async function searchLinkedIn(query, niche, onProfileAdded = null) {
         } else {
           console.log(`❌ Skipped result: Not a valid LinkedIn profile`);
         }
-        
       } catch (error) {
         console.log(`⚠️  Error processing LinkedIn profile: ${error.message}`);
         continue;
       }
     }
-    
     console.log(`✅ LinkedIn search completed: ${linkedInProfiles.length} profiles found`);
     return linkedInProfiles;
-    
   } catch (error) {
     console.error(`❌ LinkedIn search error: ${error.message}`);
     return [];

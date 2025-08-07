@@ -7,25 +7,41 @@ import { config } from '../config.js';
  * @param {string} source - Data source type ('google_search', 'linkedin')
  * @returns {Promise<Array>} Array of search queries
  */
-export async function generateQueriesWithGemini(niche, source = 'google_search') {
+export async function generateQueriesWithGemini(niche, source = 'google_search', numLinkedInQueries = null) {
   try {
     console.log(`🤖 Generating ${source.toUpperCase()} queries for: "${niche}"`);
-    
+
     if (!config.gemini.apiKey) {
       throw new Error('Gemini API key not configured');
     }
-    
+
     // Determine language and keyword distribution based on niche and source
     let languageConfig;
     if (source === 'linkedin') {
-      // LinkedIn: 12 queries total (8 French, 2 Arabic, 2 Other for Moroccan)
+      // If numLinkedInQueries is set, distribute as much as possible to French, then Arabic, then Other
       const { language, frenchCount, arabicCount, otherCount } = detectNicheLanguage(niche);
-      languageConfig = {
-        language,
-        frenchCount: Math.min(frenchCount, 8), // Cap at 8 for LinkedIn
-        arabicCount: Math.min(arabicCount, 2), // Cap at 2 for LinkedIn
-        otherCount: Math.min(otherCount, 2)     // Cap at 2 for LinkedIn
-      };
+      if (numLinkedInQueries) {
+        // Default: French > Arabic > Other
+        let remaining = numLinkedInQueries;
+        let fc = Math.min(remaining, 20); // up to 20 French
+        remaining -= fc;
+        let ac = Math.min(remaining, 5); // up to 5 Arabic
+        remaining -= ac;
+        let oc = Math.max(remaining, 0); // rest Other
+        languageConfig = {
+          language,
+          frenchCount: fc,
+          arabicCount: ac,
+          otherCount: oc
+        };
+      } else {
+        languageConfig = {
+          language,
+          frenchCount: Math.min(frenchCount, 8), // Cap at 8 for LinkedIn
+          arabicCount: Math.min(arabicCount, 2), // Cap at 2 for LinkedIn
+          otherCount: Math.min(otherCount, 2)     // Cap at 2 for LinkedIn
+        };
+      }
     } else {
       // Google Search: 25 queries total (20 French, 5 Arabic for Moroccan)
       const { language, frenchCount, arabicCount, otherCount } = detectNicheLanguage(niche);
@@ -36,14 +52,14 @@ export async function generateQueriesWithGemini(niche, source = 'google_search')
         otherCount: 0    // No other languages for Google Search
       };
     }
-    
+
     let prompt;
     if (source === 'linkedin') {
       prompt = await generateLinkedInPrompt(niche, languageConfig.language, languageConfig.frenchCount, languageConfig.arabicCount, languageConfig.otherCount);
     } else {
       prompt = await generateGoogleSearchPrompt(niche, languageConfig.language, languageConfig.frenchCount, languageConfig.arabicCount, languageConfig.otherCount);
     }
-    
+
     // Make direct API call to Gemini
     const response = await axios.post(
       `${config.gemini.baseUrl}?key=${config.gemini.apiKey}`,
@@ -61,19 +77,19 @@ export async function generateQueriesWithGemini(niche, source = 'google_search')
         timeout: 30000
       }
     );
-    
+
     if (!response.data.candidates || !response.data.candidates[0] || !response.data.candidates[0].content) {
       throw new Error('Invalid response from Gemini API');
     }
-    
+
     const text = response.data.candidates[0].content.parts[0].text;
-    
+
     // Parse the response to extract queries
     const queries = parseGeneratedQueries(text);
-    
+
     console.log(`✅ Generated ${queries.length} optimized ${source} queries`);
     return queries;
-    
+
   } catch (error) {
     console.error(`❌ Error generating queries with Gemini: ${error.message}`);
     throw error;

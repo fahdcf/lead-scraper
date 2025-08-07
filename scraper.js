@@ -389,7 +389,6 @@ async function processLinkedInSearch(searchQueries, niche, contentValidator) {
  */
 async function processGoogleSearch(searchQueries, niche, contentValidator, dataType = 'both') {
   console.log(chalk.blue(`\n🌐 Processing ${searchQueries.length} Google Search queries...`));
-  
   const allResults = [];
   let processedQueries = 0;
   let successfulQueries = 0;
@@ -403,52 +402,52 @@ async function processGoogleSearch(searchQueries, niche, contentValidator, dataT
 
     try {
       // Enhanced Google search with better targeting
-      const searchResults = await searchGoogle(query);
-      
+      let searchResults;
+      if (config._userBasedFlow) {
+        // User-based: request 2 pages (20 results)
+        searchResults = [];
+        for (let start = 1; start <= 2; start++) {
+          const pageResults = await searchGoogle(query, 10, (start - 1) * 10 + 1);
+          if (Array.isArray(pageResults)) searchResults.push(...pageResults);
+        }
+      } else {
+        // Global: default (1 page)
+        searchResults = await searchGoogle(query);
+      }
       if (searchResults.length === 0) {
         querySpinner.warn(chalk.yellow(`⚠️  No results for: "${query}"`));
         continue;
       }
-
       // Enhanced URL filtering with priority scoring
       const filteredUrls = filterUrls(searchResults);
-      
       if (filteredUrls.length === 0) {
         querySpinner.warn(chalk.yellow(`⚠️  No relevant URLs for: "${query}"`));
         continue;
       }
-
       querySpinner.text = chalk.blue(`🌐 Processing ${filteredUrls.length} high-quality URLs for: "${query}"`);
-
       let queryResults = 0;
       let queryValidated = 0;
       let queryRejected = 0;
-
       // Process each URL with content validation
       for (let i = 0; i < filteredUrls.length; i++) {
         const urlData = filteredUrls[i];
         const url = urlData.url;
-        
         querySpinner.text = chalk.blue(`🌐 Scraping (${i + 1}/${filteredUrls.length}): ${url} (Score: ${urlData.score})`);
-
         // Enhanced page fetching with retry logic
         let html = null;
         for (let retry = 0; retry < 2; retry++) {
           html = await fetchPage(url);
           if (html) break;
           if (retry < 1) {
-            await delay(1000); // Wait before retry
+            await delay(config.http.delayBetweenRequests);
           }
         }
-        
         if (!html) {
           console.log(chalk.red(`❌ Failed to fetch: ${url}`));
           continue;
         }
-
         // Content validation before extraction
         const validation = contentValidator.validateContent(html, url);
-        
         if (!validation.isRelevant) {
           queryRejected++;
           rejectedResults++;
@@ -456,14 +455,11 @@ async function processGoogleSearch(searchQueries, niche, contentValidator, dataT
           console.log(chalk.gray(`   Reasons: ${validation.reasons.join(', ')}`));
           continue;
         }
-
         // Enhanced email and phone extraction
         const emails = extractEmails(html);
         const phones = extractPhones(html);
-
         // Validate extracted contact data
         const contactValidation = contentValidator.validateContactData(emails, phones, url);
-        
         // Add validated results based on data type selection
         if (dataType === 'emails_only' || dataType === 'both') {
           contactValidation.validEmails.forEach(email => {
@@ -477,11 +473,9 @@ async function processGoogleSearch(searchQueries, niche, contentValidator, dataT
               source: 'google_search'
             });
           });
-          
           queryValidated += contactValidation.validEmails.length;
           validatedResults += contactValidation.validEmails.length;
         }
-        
         if (dataType === 'phones_only' || dataType === 'both') {
           contactValidation.validPhones.forEach(phone => {
             allResults.push({
@@ -494,32 +488,25 @@ async function processGoogleSearch(searchQueries, niche, contentValidator, dataT
               source: 'google_search'
             });
           });
-          
           queryValidated += contactValidation.validPhones.length;
           validatedResults += contactValidation.validPhones.length;
         }
-
         // Enhanced delay between requests
         if (i < filteredUrls.length - 1) {
           await delay(config.http.delayBetweenRequests);
         }
       }
-
       // Update global state for interruption handling
       currentResults = allResults;
-
       querySpinner.succeed(chalk.green(`✅ Query "${query}" completed - Found ${queryValidated} validated contacts, rejected ${queryRejected} irrelevant`));
       successfulQueries++;
-
     } catch (error) {
       querySpinner.fail(chalk.red(`❌ Query "${query}" failed: ${error.message}`));
     }
   }
-
   // Deduplicate results
   const uniqueResults = deduplicateGoogleSearchResults(allResults);
   const duplicatesRemoved = allResults.length - uniqueResults.length;
-
   console.log(chalk.blue(`\n📊 Google Search Summary:`));
   console.log(chalk.green(`   • Queries Processed: ${processedQueries}/${searchQueries.length}`));
   console.log(chalk.green(`   • Successful Queries: ${successfulQueries}`));
@@ -528,7 +515,6 @@ async function processGoogleSearch(searchQueries, niche, contentValidator, dataT
   console.log(chalk.blue(`   • Data Type: ${dataType.replace(/_/g, ' ').toUpperCase()}`));
   console.log(chalk.green(`   • Unique Results: ${uniqueResults.length}`));
   console.log(chalk.yellow(`   • Duplicates Removed: ${duplicatesRemoved}`));
-
   return uniqueResults;
 }
 
@@ -604,20 +590,29 @@ async function main() {
     console.log(chalk.cyan(`🔍 Content validation enabled for: ${niche}`));
     console.log(chalk.gray(`   Target keywords: ${contentValidator.nicheKeywords.join(', ')}`));
 
+
     // Generate AI-powered queries
     const spinner = ora(chalk.gray('🤖 Generating AI-powered search queries...')).start();
-    
     let searchQueries;
     try {
       if (dataSource === 'linkedin') {
-        searchQueries = await generateQueriesWithGemini(niche, 'linkedin');
+        if (config._userBasedFlow) {
+          // User-based: request 25 queries from Gemini
+          searchQueries = await generateQueriesWithGemini(niche, 'linkedin', 25);
+        } else {
+          searchQueries = await generateQueriesWithGemini(niche, 'linkedin');
+        }
       } else {
         searchQueries = await generateQueriesWithGemini(niche, 'google_search');
       }
       spinner.succeed(chalk.green(`✅ Generated ${searchQueries.length} AI-powered queries`));
     } catch (error) {
       console.log(chalk.yellow('⚠️  AI query generation failed, using fallback queries'));
-      searchQueries = config.searchQueries.slice(0, 10); // Use first 10 fallback queries
+      if (dataSource === 'linkedin' && config._userBasedFlow) {
+        searchQueries = config.searchQueries.slice(0, 25); // Use first 25 fallback queries for user-based LinkedIn
+      } else {
+        searchQueries = config.searchQueries.slice(0, 10); // Use first 10 fallback queries
+      }
     }
 
     console.log(chalk.yellow(`📋 Processing ${searchQueries.length} enhanced queries...`));
