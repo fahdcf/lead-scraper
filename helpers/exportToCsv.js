@@ -256,25 +256,27 @@ async function exportToText(results, filename, niche = '') {
       filename = `results_${timestamp}.txt`;
     }
 
-    // Determine data type and create header
-    const emails = results.filter(r => r.email).map(r => r.email.toLowerCase());
-    const phones = results.filter(r => r.phone).map(r => r.phone);
+    // Extract and deduplicate emails and phones
+    const emails = results.filter(r => r.email && r.email.trim() !== '').map(r => r.email.toLowerCase().trim());
+    const phones = results.filter(r => r.phone && r.phone.trim() !== '').map(r => r.phone.trim());
     
-    // Remove duplicates
+    // Remove duplicates using Set
     const uniqueEmails = [...new Set(emails)];
     const uniquePhones = [...new Set(phones)];
     
-    let header = '';
+    // Sort for better readability
+    uniqueEmails.sort();
+    uniquePhones.sort();
+    
     let content = '';
     
-         if (uniqueEmails.length > 0 && uniquePhones.length > 0) {
-       // Both emails and phones
-       header = `Email and Phone Numbers Data for: ${niche}\n`;
-       header += `Total Emails: ${uniqueEmails.length} | Total Phone Numbers: ${uniquePhones.length}\n`;
-       header += `Generated on: ${new Date().toLocaleString()}\n`;
-       header += `─`.repeat(60) + `\n\n`;
+    if (uniqueEmails.length > 0 && uniquePhones.length > 0) {
+      // Both emails and phones
+      content = `Email and Phone Numbers Data for: ${niche}\n`;
+      content += `Total Emails: ${uniqueEmails.length} | Total Phone Numbers: ${uniquePhones.length}\n`;
+      content += `Generated on: ${new Date().toLocaleString()}\n`;
+      content += `─`.repeat(60) + `\n\n`;
       
-      content = header;
       content += `EMAILS:\n`;
       content += `─`.repeat(20) + `\n`;
       uniqueEmails.forEach(email => {
@@ -287,34 +289,43 @@ async function exportToText(results, filename, niche = '') {
         content += `${phone}\n`;
       });
       
-         } else if (uniqueEmails.length > 0) {
-       // Only emails
-       header = `Email Data for: ${niche}\n`;
-       header += `Total Emails: ${uniqueEmails.length}\n`;
-       header += `Generated on: ${new Date().toLocaleString()}\n`;
-       header += `─`.repeat(60) + `\n\n`;
+    } else if (uniqueEmails.length > 0) {
+      // Only emails
+      content = `Email Data for: ${niche}\n`;
+      content += `Total Emails: ${uniqueEmails.length}\n`;
+      content += `Generated on: ${new Date().toLocaleString()}\n`;
+      content += `─`.repeat(60) + `\n\n`;
       
-      content = header;
+      content += `EMAILS:\n`;
+      content += `─`.repeat(20) + `\n`;
       uniqueEmails.forEach(email => {
         content += `${email}\n`;
       });
       
-         } else if (uniquePhones.length > 0) {
-       // Only phones
-       header = `Phone Numbers Data for: ${niche}\n`;
-       header += `Total Phone Numbers: ${uniquePhones.length}\n`;
-       header += `Generated on: ${new Date().toLocaleString()}\n`;
-       header += `─`.repeat(60) + `\n\n`;
+    } else if (uniquePhones.length > 0) {
+      // Only phones
+      content = `Phone Numbers Data for: ${niche}\n`;
+      content += `Total Phone Numbers: ${uniquePhones.length}\n`;
+      content += `Generated on: ${new Date().toLocaleString()}\n`;
+      content += `─`.repeat(60) + `\n\n`;
       
-      content = header;
+      content += `PHONE NUMBERS:\n`;
+      content += `─`.repeat(20) + `\n`;
       uniquePhones.forEach(phone => {
         content += `${phone}\n`;
       });
+    } else {
+      content = `No contact information found for: ${niche}\n`;
+      content += `Generated on: ${new Date().toLocaleString()}\n`;
     }
 
     // Write to file
     await fs.promises.writeFile(filename, content, 'utf8');
     console.log(chalk.green(`✅ Text file exported: ${filename}`));
+    
+    // Verify file was created
+    const stats = await fs.promises.stat(filename);
+    console.log(chalk.blue(`✅ File verified: ${filename} (${stats.size} bytes)`));
     
     return filename;
     

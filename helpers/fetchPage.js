@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { config } from '../config.js';
+import https from 'https';
 
 /**
  * Fetch HTML content from a URL with proper headers and error handling
@@ -18,22 +19,40 @@ export async function fetchPage(url) {
         'Connection': 'keep-alive',
         'Upgrade-Insecure-Requests': '1'
       },
-      maxRedirects: 5,
+      maxRedirects: 3, // Reduced from 5 to avoid redirect loops
       validateStatus: function (status) {
-        return status >= 200 && status < 400; // Accept 2xx and 3xx status codes
-      }
+        return status < 400; // Accept status codes less than 400
+      },
+      httpsAgent: new https.Agent({
+        rejectUnauthorized: false, // Allow self-signed certificates
+        timeout: config.http.timeout
+      })
     });
 
     return response.data;
+
   } catch (error) {
-    console.error(`❌ Failed to fetch ${url}:`, error.message);
+    // Handle specific error types
+    if (error.code === 'ECONNRESET') {
+      console.log(`Connection reset for ${url}`);
+    } else if (error.code === 'ENOTFOUND') {
+      console.log(`Domain not found for ${url}`);
+    } else if (error.code === 'ETIMEDOUT') {
+      console.log(`Timeout for ${url}`);
+    } else if (error.response) {
+      console.log(`HTTP ${error.response.status} for ${url}`);
+    } else {
+      console.log(`Failed to fetch ${url}: ${error.message}`);
+    }
+    
     return null;
   }
 }
 
 /**
- * Add delay between requests to avoid being blocked
- * @param {number} ms - Milliseconds to wait
+ * Delay function for rate limiting
+ * @param {number} ms - Milliseconds to delay
+ * @returns {Promise} - Promise that resolves after delay
  */
 export function delay(ms = config.http.delayBetweenRequests) {
   return new Promise(resolve => setTimeout(resolve, ms));

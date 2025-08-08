@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { config } from '../config.js';
+import chalk from 'chalk'; // Added for colored console output
 
 /**
  * Generate AI-powered search queries using Gemini API
@@ -9,7 +10,11 @@ import { config } from '../config.js';
  */
 export async function generateQueriesWithGemini(niche, source = 'google_search', numLinkedInQueries = null) {
   try {
-    console.log(`🤖 Generating ${source.toUpperCase()} queries for: "${niche}"`);
+    console.log(chalk.cyan(`🤖 Gemini AI: Generating ${source.toUpperCase()} queries for: "${niche}"`));
+    console.log(chalk.gray(`   📝 Request type: ${source === 'linkedin' ? 'LinkedIn Profiles' : 'Google Search'}`));
+    if (numLinkedInQueries) {
+      console.log(chalk.gray(`   📊 Requested queries: ${numLinkedInQueries}`));
+    }
 
     if (!config.gemini.apiKey) {
       throw new Error('Gemini API key not configured');
@@ -53,12 +58,16 @@ export async function generateQueriesWithGemini(niche, source = 'google_search',
       };
     }
 
+    console.log(chalk.blue(`   🌍 Language distribution: French(${languageConfig.frenchCount}), Arabic(${languageConfig.arabicCount}), Other(${languageConfig.otherCount})`));
+
     let prompt;
     if (source === 'linkedin') {
       prompt = await generateLinkedInPrompt(niche, languageConfig.language, languageConfig.frenchCount, languageConfig.arabicCount, languageConfig.otherCount);
     } else {
       prompt = await generateGoogleSearchPrompt(niche, languageConfig.language, languageConfig.frenchCount, languageConfig.arabicCount, languageConfig.otherCount);
     }
+
+    console.log(chalk.blue(`   📤 Sending request to Gemini API...`));
 
     // Make direct API call to Gemini
     const response = await axios.post(
@@ -78,6 +87,8 @@ export async function generateQueriesWithGemini(niche, source = 'google_search',
       }
     );
 
+    console.log(chalk.green(`   ✅ Gemini API response received`));
+
     if (!response.data.candidates || !response.data.candidates[0] || !response.data.candidates[0].content) {
       throw new Error('Invalid response from Gemini API');
     }
@@ -87,11 +98,11 @@ export async function generateQueriesWithGemini(niche, source = 'google_search',
     // Parse the response to extract queries
     const queries = parseGeneratedQueries(text);
 
-    console.log(`✅ Generated ${queries.length} optimized ${source} queries`);
+    console.log(chalk.green(`✅ Gemini AI: Generated ${queries.length} optimized ${source} queries`));
     return queries;
 
   } catch (error) {
-    console.error(`❌ Error generating queries with Gemini: ${error.message}`);
+    console.error(chalk.red(`❌ Gemini AI Error: ${error.message}`));
     throw error;
   }
 }
