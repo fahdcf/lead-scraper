@@ -73,7 +73,9 @@ export function extractEmails(html) {
       cleanEmail = cleanEmail.replace(/\s+/g, '');
       
       if (isValidEmail(cleanEmail)) {
-        allEmails.add(cleanEmail.toLowerCase());
+        // Normalize email for better deduplication
+        const normalizedEmail = normalizeEmail(cleanEmail);
+        allEmails.add(normalizedEmail);
       }
     });
   });
@@ -120,4 +122,32 @@ function isValidEmail(email) {
   }
 
   return true;
+}
+
+/**
+ * Normalize email address for better deduplication
+ * @param {string} email - Email address to normalize
+ * @returns {string} - Normalized email address
+ */
+function normalizeEmail(email) {
+  if (!email) return '';
+  
+  // Convert to lowercase
+  let normalized = email.toLowerCase().trim();
+  
+  // Remove common email variations
+  normalized = normalized.replace(/\+[^@]+@/, '@'); // Remove +tags
+  
+  // Remove common disposable email domains
+  const disposableDomains = [
+    '10minutemail.com', 'guerrillamail.com', 'tempmail.org',
+    'mailinator.com', 'throwaway.email', 'temp-mail.org'
+  ];
+  
+  const domain = normalized.split('@')[1];
+  if (disposableDomains.includes(domain)) {
+    return ''; // Return empty string to exclude disposable emails
+  }
+  
+  return normalized;
 } 

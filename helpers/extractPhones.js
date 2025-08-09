@@ -81,7 +81,11 @@ export function extractPhones(html) {
       }
       
       if (isValidPhone(cleanPhone)) {
-        allPhones.add(cleanPhone);
+        // Normalize phone for better deduplication
+        const normalizedPhone = normalizePhone(cleanPhone);
+        if (normalizedPhone) {
+          allPhones.add(normalizedPhone);
+        }
       }
     });
   });
@@ -121,4 +125,39 @@ export function isValidPhone(phone) {
   }
 
   return true;
+}
+
+/**
+ * Normalize phone number for better deduplication
+ * @param {string} phone - Phone number to normalize
+ * @returns {string} - Normalized phone number or null if invalid
+ */
+function normalizePhone(phone) {
+  if (!phone) return null;
+  
+  // Remove all non-digit characters except +
+  let normalized = phone.replace(/[^\d+]/g, '');
+  
+  // Handle Moroccan phone numbers
+  if (normalized.startsWith('+212')) {
+    return normalized; // Already in international format
+  } else if (normalized.startsWith('212')) {
+    return '+' + normalized; // Add + prefix
+  } else if (normalized.startsWith('0') && normalized.length === 10) {
+    return '+212' + normalized.substring(1); // Convert 0XXXXXXXXX to +212XXXXXXXXX
+  } else if (normalized.length === 9 && (normalized.startsWith('6') || normalized.startsWith('7'))) {
+    return '+212' + normalized; // Convert 6XXXXXXXX or 7XXXXXXXX to +2126XXXXXXXX
+  }
+  
+  // For other international numbers, ensure they start with +
+  if (normalized.startsWith('00')) {
+    return '+' + normalized.substring(2);
+  }
+  
+  // If it's a valid Moroccan number but not in expected format, try to fix it
+  if (normalized.length === 10 && normalized.startsWith('0')) {
+    return '+212' + normalized.substring(1);
+  }
+  
+  return normalized;
 } 

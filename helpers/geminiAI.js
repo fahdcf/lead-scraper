@@ -421,3 +421,358 @@ export async function generateAllSourceQueries(niche) {
     };
   }
 }
+
+/**
+ * Analyze and filter scraped data using Gemini AI
+ * @param {Array} results - Array of scraped results (emails/phones)
+ * @param {string} niche - Target niche
+ * @param {string} source - Data source ('google_search', 'linkedin', 'all_sources')
+ * @returns {Promise<Object>} Filtered results with analysis
+ */
+export async function analyzeAndFilterData(results, niche, source) {
+  try {
+    console.log(chalk.cyan(`🤖 Gemini AI: Analyzing and filtering ${results.length} results for "${niche}"`));
+    console.log(chalk.gray(`   📊 Source: ${source}`));
+
+    if (!config.gemini.apiKey) {
+      console.log(chalk.yellow('⚠️  Gemini API key not configured, skipping AI analysis'));
+      return {
+        filteredResults: results,
+        analysis: {
+          totalAnalyzed: results.length,
+          removed: 0,
+          kept: results.length,
+          reasons: []
+        }
+      };
+    }
+
+    // Prepare data for analysis
+    const dataToAnalyze = results.map((result, index) => ({
+      id: index + 1,
+      email: result.email || null,
+      phone: result.phone || null,
+      url: result.url || null,
+      query: result.query || null
+    }));
+
+    // Generate analysis prompt based on source
+    let prompt;
+    if (source === 'linkedin') {
+      prompt = generateLinkedInAnalysisPrompt(dataToAnalyze, niche);
+    } else {
+      prompt = generateGoogleSearchAnalysisPrompt(dataToAnalyze, niche);
+    }
+
+    console.log(chalk.blue(`   📤 Sending data to Gemini AI for analysis...`));
+
+    // Make API call to Gemini
+    const response = await axios.post(
+      `${config.gemini.baseUrl}?key=${config.gemini.apiKey}`,
+      {
+        contents: [{
+          parts: [{
+            text: prompt
+          }]
+        }]
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        timeout: 60000 // Longer timeout for data analysis
+      }
+    );
+
+    console.log(chalk.green(`   ✅ Gemini AI analysis completed`));
+
+    if (!response.data.candidates || !response.data.candidates[0] || !response.data.candidates[0].content) {
+      throw new Error('Invalid response from Gemini API');
+    }
+
+    const analysisText = response.data.candidates[0].content.parts[0].text;
+    
+    // Parse the analysis response
+    const analysis = parseDataAnalysis(analysisText, results);
+
+    console.log(chalk.blue(`   📊 Analysis Summary:`));
+    console.log(chalk.gray(`      • Total analyzed: ${analysis.totalAnalyzed}`));
+    console.log(chalk.gray(`      • Removed: ${analysis.removed}`));
+    console.log(chalk.gray(`      • Kept: ${analysis.kept}`));
+    console.log(chalk.gray(`      • Quality improvement: ${Math.round((analysis.removed / analysis.totalAnalyzed) * 100)}%`));
+
+    return analysis;
+
+  } catch (error) {
+    console.error(chalk.red(`❌ Error in AI data analysis: ${error.message}`));
+    console.log(chalk.yellow('⚠️  Returning original results without AI filtering'));
+    
+    return {
+      filteredResults: results,
+      analysis: {
+        totalAnalyzed: results.length,
+        removed: 0,
+        kept: results.length,
+        reasons: ['AI analysis failed - using original data']
+      }
+    };
+  }
+}
+
+/**
+ * Generate prompt for Google Search data analysis
+ */
+function generateGoogleSearchAnalysisPrompt(data, niche) {
+  const nicheInfo = niche.toLowerCase();
+  const isHealthcare = nicheInfo.includes('dentist') || nicheInfo.includes('doctor') || nicheInfo.includes('medical') || nicheInfo.includes('clinic');
+  const isTechnology = nicheInfo.includes('developer') || nicheInfo.includes('programmer') || nicheInfo.includes('software') || nicheInfo.includes('web');
+  const isProfessional = nicheInfo.includes('lawyer') || nicheInfo.includes('accountant') || nicheInfo.includes('consultant') || nicheInfo.includes('architect');
+
+  return `You are a data quality analyst specializing in Google Search results. Analyze the following scraped contact data for the niche "${niche}" from Google Search.
+
+TASK: Filter out contacts that are NOT relevant to the target business niche. Focus on business contact information quality and relevance.
+
+DETAILED FILTERING CRITERIA (remove if ANY apply):
+
+1. **Obvious Spam/Test Emails**:
+   - email@example.com, test@test.com, youremail@yourhosting.com
+   - Obvious fake or placeholder emails
+   - Disposable email domains (10minutemail.com, temp-mail.org, etc.)
+
+2. **Malformed Contact Information**:
+   - Emails that don't follow basic email format (missing @, invalid characters)
+   - Phone numbers with suspicious patterns (666666666, 999999999, 000000000)
+   - Phone numbers that are clearly fake or test numbers
+
+3. **Institutional/Educational Contacts** (NOT related to target business):
+   - Schools, universities, government agencies unrelated to the business niche
+   - Training institutions (like OFPPT) not directly related to the target business
+   - Academic institutions that don't serve the target business type
+   - Government agencies that don't provide business services
+
+4. **Completely Irrelevant Business Contacts**:
+   - Contacts from completely different industries
+   - Personal contacts that have no business relevance
+   - Generic business directories or listing sites
+   - Competitor analysis tools or business intelligence services
+
+5. **Geographic Mismatch** (if niche specifies location):
+   - Contacts from completely different regions/countries
+   - International companies with no local presence
+   - Overseas service providers not serving the target area
+
+IMPORTANT FILTERING RULES:
+
+✅ KEEP these contacts:
+- Legitimate business emails in the target niche
+- Medical universities/hospitals for healthcare niches (e.g., um6ss.ma for dentists)
+- Professional associations related to the target business
+- Local business contacts matching the niche
+- Generic names that could be legitimate professionals (e.g., stephane.roochard@gmail.com)
+- Business domains that might be related to the niche
+- Contact information from legitimate business websites
+
+❌ REMOVE these contacts:
+- Test/placeholder emails and phone numbers
+- Institutional contacts unrelated to the business niche
+- Malformed or suspicious contact information
+- Completely irrelevant business contacts
+- Geographic mismatches (if location-specific niche)
+
+EXAMPLES FOR NICHE "dentists in Casablanca":
+
+REMOVE:
+- contact@ofppt.ma (training institution - not dental business)
+- email@example.com (test email)
+- +212666666666 (suspicious phone pattern)
+- info@university.edu (university - not dental business)
+- contact@restaurant.com (different industry)
+
+KEEP:
+- stephane.roochard@gmail.com (could be legitimate dentist)
+- fm6md.casa@um6ss.ma (medical university - relevant for dentists)
+- contact@dentalclinic.ma (dental clinic - directly related)
+- info@dentalassociation.ma (dental association - directly related)
+- contact@localbusiness.ma (could be dental business)
+
+DATA TO ANALYZE:
+${JSON.stringify(data, null, 2)}
+
+RESPONSE FORMAT (JSON only):
+{
+  "analysis": {
+    "totalAnalyzed": number,
+    "removed": number,
+    "kept": number,
+    "qualityScore": number (0-100)
+  },
+  "removedItems": [
+    {
+      "id": number,
+      "reason": "detailed reason for removal (be specific)"
+    }
+  ],
+  "keptItems": [
+    {
+      "id": number,
+      "confidence": "high/medium/low",
+      "reason": "why this contact is relevant"
+    }
+  ],
+  "summary": "comprehensive analysis summary including quality insights"
+}
+
+Analyze each contact thoroughly and respond with valid JSON only.`;
+}
+
+/**
+ * Generate prompt for LinkedIn data analysis
+ */
+function generateLinkedInAnalysisPrompt(data, niche) {
+  const nicheInfo = niche.toLowerCase();
+  const isHealthcare = nicheInfo.includes('dentist') || nicheInfo.includes('doctor') || nicheInfo.includes('medical') || nicheInfo.includes('clinic');
+  const isTechnology = nicheInfo.includes('developer') || nicheInfo.includes('programmer') || nicheInfo.includes('software') || nicheInfo.includes('web');
+  const isProfessional = nicheInfo.includes('lawyer') || nicheInfo.includes('accountant') || nicheInfo.includes('consultant') || nicheInfo.includes('architect');
+
+  return `You are a LinkedIn profile quality analyst specializing in professional networking data. Analyze the following LinkedIn profile data for the niche "${niche}".
+
+TASK: Filter out LinkedIn profiles that are NOT relevant to the target business niche AND remove duplicate profiles. Focus on professional relevance and profile uniqueness.
+
+DETAILED FILTERING CRITERIA (remove if ANY apply):
+
+1. **Duplicate Profile Detection**:
+   - Multiple profiles for the same person (check name similarity and company)
+   - Same LinkedIn URL with different variations
+   - Profiles with identical or very similar professional information
+   - Keep the most complete/updated profile, remove duplicates
+
+2. **Professional Relevance to Target Niche**:
+   - Profiles from completely different industries
+   - Students or interns not yet in the target profession
+   - Retired professionals no longer active in the field
+   - Profiles with no connection to the target business type
+   - Generic business profiles with no specific expertise
+
+3. **Profile Quality Issues**:
+   - Incomplete profiles with minimal information
+   - Profiles with no professional experience listed
+   - Profiles that appear to be fake or spam
+   - Profiles with suspicious or inconsistent information
+
+4. **Geographic Mismatch** (if niche specifies location):
+   - Profiles from completely different regions/countries
+   - International professionals with no local connection
+   - Remote workers not serving the target area
+
+5. **Institutional/Educational Profiles** (NOT related to target business):
+   - Academic profiles unrelated to the business niche
+   - Student profiles not yet in the profession
+   - Training institution profiles not serving the business
+   - Government profiles not related to business services
+
+IMPORTANT FILTERING RULES:
+
+✅ KEEP these profiles:
+- Active professionals in the target niche
+- Business owners and entrepreneurs in the target field
+- Industry experts and consultants
+- Medical professionals for healthcare niches
+- Relevant institutional profiles (e.g., medical universities for dentists)
+- Complete profiles with relevant experience
+- Local professionals serving the target area
+
+❌ REMOVE these profiles:
+- Duplicate profiles (keep the best one)
+- Irrelevant industry professionals
+- Incomplete or low-quality profiles
+- Geographic mismatches (if location-specific)
+- Institutional profiles unrelated to the business
+
+DUPLICATE DETECTION STRATEGY:
+- Compare names, companies, and professional titles
+- Look for similar URLs or profile information
+- Check for multiple profiles of the same person
+- Keep the most complete and recent profile
+- Remove older or less complete duplicates
+
+EXAMPLES FOR NICHE "dentists in Casablanca":
+
+REMOVE:
+- Duplicate profiles of the same dentist
+- Software developer profiles (different industry)
+- Student profiles not yet practicing
+- International dentists not serving Casablanca
+- Generic business profiles with no dental connection
+
+KEEP:
+- Active dentists in Casablanca
+- Dental clinic owners and managers
+- Dental specialists and consultants
+- Medical university faculty (relevant for dental field)
+- Complete profiles with dental experience
+
+DATA TO ANALYZE:
+${JSON.stringify(data, null, 2)}
+
+RESPONSE FORMAT (JSON only):
+{
+  "analysis": {
+    "totalAnalyzed": number,
+    "removed": number,
+    "kept": number,
+    "qualityScore": number (0-100),
+    "duplicatesRemoved": number
+  },
+  "removedItems": [
+    {
+      "id": number,
+      "reason": "detailed reason for removal (duplicate/inrelevant/quality issue)"
+    }
+  ],
+  "keptItems": [
+    {
+      "id": number,
+      "confidence": "high/medium/low",
+      "reason": "why this profile is relevant and unique"
+    }
+  ],
+  "summary": "comprehensive analysis including duplicate detection and quality insights"
+}
+
+Analyze each LinkedIn profile thoroughly for relevance, quality, and uniqueness. Respond with valid JSON only.`;
+}
+
+/**
+ * Parse Gemini AI analysis response
+ */
+function parseDataAnalysis(analysisText, originalResults) {
+  try {
+    // Extract JSON from the response
+    const jsonMatch = analysisText.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw new Error('No JSON found in response');
+    }
+
+    const analysis = JSON.parse(jsonMatch[0]);
+    
+    // Create filtered results
+    const removedIds = new Set(analysis.removedItems.map(item => item.id));
+    const filteredResults = originalResults.filter((_, index) => !removedIds.has(index + 1));
+
+    return {
+      filteredResults,
+      analysis: {
+        totalAnalyzed: analysis.analysis.totalAnalyzed,
+        removed: analysis.analysis.removed,
+        kept: analysis.analysis.kept,
+        qualityScore: analysis.analysis.qualityScore,
+        reasons: analysis.removedItems.map(item => item.reason),
+        summary: analysis.summary
+      }
+    };
+
+  } catch (error) {
+    console.error(chalk.red(`❌ Error parsing AI analysis: ${error.message}`));
+    throw new Error('Failed to parse AI analysis response');
+  }
+}

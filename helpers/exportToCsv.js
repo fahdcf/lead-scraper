@@ -77,27 +77,79 @@ export async function exportLinkedInResults(results, format, filename) {
 }
 
 /**
- * Deduplicate LinkedIn profiles based on name and profile URL
+ * Enhanced deduplication for LinkedIn profiles
+ * Removes duplicates based on name, URL, and bio similarity
  * @param {Array} profiles - Array of LinkedIn profile objects
  * @returns {Array} Deduplicated profiles
  */
 function deduplicateLinkedInProfiles(profiles) {
-  const seen = new Set();
+  const seenUrls = new Set();
+  const seenNames = new Set();
   const uniqueProfiles = [];
   
   for (const profile of profiles) {
     if (!profile.name || !profile.profileUrl) continue;
     
-    // Create a unique key based on name and URL
-    const key = `${profile.name.toLowerCase().trim()}_${profile.profileUrl}`;
+    // Normalize name and URL
+    const normalizedName = profile.name.toLowerCase().trim().replace(/\s+/g, ' ');
+    const normalizedUrl = profile.profileUrl.toLowerCase().trim();
     
-    if (!seen.has(key)) {
-      seen.add(key);
-      uniqueProfiles.push(profile);
+    // Check for exact URL duplicates
+    if (seenUrls.has(normalizedUrl)) {
+      continue; // Skip duplicate URLs
     }
+    
+    // Check for name duplicates (with some tolerance for minor variations)
+    const nameKey = normalizedName.replace(/[^a-z0-9]/g, ''); // Remove special chars for comparison
+    if (seenNames.has(nameKey)) {
+      // Check if it's the same person with different URL formats
+      const existingProfile = uniqueProfiles.find(p => {
+        const existingName = p.name.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+        return existingName === nameKey;
+      });
+      
+      if (existingProfile) {
+        // Keep the one with more complete information
+        const currentScore = calculateProfileCompleteness(profile);
+        const existingScore = calculateProfileCompleteness(existingProfile);
+        
+        if (currentScore > existingScore) {
+          // Replace existing profile with better one
+          const index = uniqueProfiles.indexOf(existingProfile);
+          uniqueProfiles[index] = profile;
+          seenUrls.add(normalizedUrl);
+        }
+        continue;
+      }
+    }
+    
+    // Add new unique profile
+    seenUrls.add(normalizedUrl);
+    seenNames.add(nameKey);
+    uniqueProfiles.push(profile);
   }
   
+  console.log(chalk.cyan(`📊 LinkedIn Deduplication: ${profiles.length} → ${uniqueProfiles.length} unique profiles`));
+  console.log(chalk.gray(`   • Duplicates removed: ${profiles.length - uniqueProfiles.length}`));
+  
   return uniqueProfiles;
+}
+
+/**
+ * Calculate profile completeness score
+ * @param {Object} profile - LinkedIn profile object
+ * @returns {number} Completeness score (0-100)
+ */
+function calculateProfileCompleteness(profile) {
+  let score = 0;
+  
+  if (profile.name) score += 20;
+  if (profile.profileUrl) score += 20;
+  if (profile.bio && profile.bio.length > 10) score += 30;
+  if (profile.company) score += 15;
+  if (profile.isCompanyPage !== undefined) score += 15;
+  
+  return score;
 }
 
 /**

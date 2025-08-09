@@ -8,16 +8,19 @@ import { fetchPage, delay } from './helpers/fetchPage.js';
 import { extractEmails } from './helpers/extractEmails.js';
 import { extractPhones } from './helpers/extractPhones.js';
 import { exportResults } from './helpers/exportToCsv.js';
-import { generateQueriesWithGemini } from './helpers/geminiAI.js';
+import { generateQueriesWithGemini, analyzeAndFilterData } from './helpers/geminiAI.js';
 import { searchLinkedIn } from './helpers/multiSourceSearch.js';
 import { ContentValidator } from './helpers/contentValidator.js';
 import readline from 'readline';
 
-// Global state for interruption handling
+// Global state for interruption handling and auto-save
 let isProcessing = false;
 let currentResults = [];
 let currentNiche = '';
 let currentDataType = null;
+let autoSaveInterval = null;
+let lastAutoSaveTime = 0;
+const AUTO_SAVE_INTERVAL = 120000; // 120 seconds in milliseconds
 
 /**
  * Create readline interface for user input
@@ -113,10 +116,140 @@ async function getDataTypeSelection(rl) {
 }
 
 /**
+ * Start auto-save functionality
+ */
+function startAutoSave() {
+  if (autoSaveInterval) {
+    clearInterval(autoSaveInterval);
+  }
+  
+  autoSaveInterval = setInterval(async () => {
+    try {
+      if (isProcessing && currentResults && currentResults.length > 0) {
+        await performAutoSave();
+      }
+    } catch (intervalError) {
+      console.error(chalk.red(`❌ Auto-save interval error: ${intervalError.message}`));
+      // Don't let interval errors crash the process
+    }
+  }, AUTO_SAVE_INTERVAL);
+  
+  console.log(chalk.cyan(`🔄 Auto-save enabled: Saving every ${AUTO_SAVE_INTERVAL / 1000} seconds`));
+}
+
+/**
+ * Stop auto-save functionality
+ */
+function stopAutoSave() {
+  if (autoSaveInterval) {
+    clearInterval(autoSaveInterval);
+    autoSaveInterval = null;
+    console.log(chalk.cyan('🔄 Auto-save disabled'));
+  }
+}
+
+/**
+ * Perform auto-save of current results
+ */
+async function performAutoSave() {
+  try {
+    const now = Date.now();
+    if (now - lastAutoSaveTime < AUTO_SAVE_INTERVAL) {
+      return; // Don't auto-save too frequently
+    }
+    
+    // Don't auto-save if no results yet
+    if (!currentResults || currentResults.length === 0) {
+      return;
+    }
+    
+    console.log(chalk.yellow(`\n💾 Auto-saving ${currentResults.length} results...`));
+    
+    if (currentDataType === 'linkedin' || (currentResults.length > 0 && currentResults[0].name && currentResults[0].profileUrl)) {
+      // Auto-save LinkedIn results
+      const { exportLinkedInToExcel } = await import('./helpers/exportToCsv.js');
+      const filename = `${currentNiche.replace(/[^a-zA-Z0-9]/g, '_')}_linkedin_results_autosave.xlsx`;
+      await exportLinkedInToExcel(currentResults, currentNiche, filename);
+      console.log(chalk.green(`✅ Auto-saved LinkedIn results to: ${filename}`));
+    } else {
+      // Auto-save Google Search results (without AI analysis for speed)
+      await saveResultsAutoSave(currentResults, currentNiche, currentDataType);
+    }
+    
+    lastAutoSaveTime = now;
+  } catch (error) {
+    console.error(chalk.red(`❌ Auto-save failed: ${error.message}`));
+    // Don't let auto-save errors crash the main process
+    console.error(chalk.gray('Auto-save error details:', error.stack));
+  }
+}
+
+/**
+ * Save results for auto-save (without AI analysis)
+ */
+async function saveResultsAutoSave(allResults, niche, dataType = null) {
+  try {
+    // Apply enhanced deduplication for Google Search results
+    const deduplicatedResults = deduplicateGoogleSearchResults(allResults);
+    
+    // For Google Search data, handle based on data type selection
+    let finalResults = [];
+    
+    if (dataType === 'emails_only') {
+      finalResults = deduplicatedResults
+        .filter(result => result.email)
+        .map(result => ({
+          email: result.email,
+          phone: null
+        }));
+    } else if (dataType === 'phones_only') {
+      finalResults = deduplicatedResults
+        .filter(result => result.phone)
+        .map(result => ({
+          email: null,
+          phone: result.phone
+        }));
+    } else {
+      const emailResults = deduplicatedResults
+        .filter(result => result.email)
+        .map(result => ({
+          email: result.email,
+          phone: null
+        }));
+      
+      const phoneResults = deduplicatedResults
+        .filter(result => result.phone)
+        .map(result => ({
+          email: null,
+          phone: result.phone
+        }));
+      
+      finalResults = [...emailResults, ...phoneResults];
+    }
+
+    // Generate filename for auto-save
+    const filename = `${niche.replace(/[^a-zA-Z0-9]/g, '_')}_results_autosave.txt`;
+    
+    // Export results to text format
+    const { exportResults } = await import('./helpers/exportToCsv.js');
+    await exportResults(finalResults, 'txt', filename, niche);
+    
+    console.log(chalk.green(`✅ Auto-saved Google Search results to: ${filename}`));
+    
+  } catch (error) {
+    console.error(chalk.red(`❌ Error in auto-save: ${error.message}`));
+    throw error;
+  }
+}
+
+/**
  * Global interruption handler
  */
 async function handleGlobalInterruption() {
   console.log(chalk.yellow('\n⚠️  Scraper interrupted by user'));
+  
+  // Stop auto-save
+  stopAutoSave();
   
   if (isProcessing && currentResults.length > 0) {
     console.log(chalk.yellow('💾 Saving partial results...'));
@@ -150,21 +283,32 @@ async function handleGlobalInterruption() {
  */
 async function saveResults(allResults, niche, isInterrupted = false, dataType = null) {
   try {
-    console.log(chalk.blue(`💾 Saving ${allResults.length} validated results...`));
+    console.log(chalk.blue(`💾 Processing ${allResults.length} validated results...`));
     
-    // Check if this is LinkedIn data
+    // Determine data source type for AI analysis
     const isLinkedInData = allResults.length > 0 && allResults[0].name && allResults[0].profileUrl;
+    const sourceType = isLinkedInData ? 'linkedin' : 'google_search';
     
-    if (isLinkedInData) {
-      // For LinkedIn data, use Excel format by default
-      const filename = niche ? `${niche.replace(/[^a-zA-Z0-9]/g, '_')}_linkedin_results.xlsx` : `linkedin_results_${Date.now()}.xlsx`;
-      const finalFilename = isInterrupted ? filename.replace('.xlsx', `_partial_${Date.now()}.xlsx`) : filename;
-      
-      console.log(chalk.gray(`📁 Saving to: ${finalFilename}`));
-      
-      // Import and call exportLinkedInToExcel directly to avoid double export
-      const { exportLinkedInToExcel } = await import('./helpers/exportToCsv.js');
-      const actualFilename = await exportLinkedInToExcel(allResults, niche);
+    // Apply AI analysis and filtering before saving
+    console.log(chalk.cyan(`\n🤖 Applying AI-powered data analysis and filtering for ${sourceType.toUpperCase()}...`));
+    const aiAnalysis = await analyzeAndFilterData(allResults, niche, sourceType);
+    
+    // Use filtered results
+    const aiFilteredResults = aiAnalysis.filteredResults;
+    console.log(chalk.green(`✅ AI analysis completed - ${aiFilteredResults.length} results after filtering`));
+    
+    console.log(chalk.blue(`💾 Saving ${aiFilteredResults.length} AI-filtered results...`));
+    
+          if (isLinkedInData) {
+        // For LinkedIn data, use Excel format by default
+        const filename = niche ? `${niche.replace(/[^a-zA-Z0-9]/g, '_')}_linkedin_results.xlsx` : `linkedin_results_${Date.now()}.xlsx`;
+        const finalFilename = isInterrupted ? filename.replace('.xlsx', `_partial_${Date.now()}.xlsx`) : filename;
+        
+        console.log(chalk.gray(`📁 Saving to: ${finalFilename}`));
+        
+        // Import and call exportLinkedInToExcel directly to avoid double export
+        const { exportLinkedInToExcel } = await import('./helpers/exportToCsv.js');
+        const actualFilename = await exportLinkedInToExcel(aiFilteredResults, niche);
       
       // Verify file was created
       const fs = await import('fs/promises');
@@ -177,12 +321,15 @@ async function saveResults(allResults, niche, isInterrupted = false, dataType = 
       }
       
       // Display LinkedIn summary
-      const uniqueProfiles = new Set(allResults.map(r => `${r.name}_${r.profileUrl}`));
+      const uniqueProfiles = new Set(aiFilteredResults.map(r => `${r.name}_${r.profileUrl}`));
       console.log(chalk.blue.bold(`\n📈 ${isInterrupted ? 'Partial' : 'Final'} LinkedIn Scraping Summary:`));
       console.log(chalk.gray('─'.repeat(60)));
       console.log(chalk.green(`   • Total LinkedIn Profiles: ${allResults.length}`));
+      console.log(chalk.green(`   • AI-Filtered Profiles: ${aiFilteredResults.length}`));
       console.log(chalk.green(`   • Unique Profiles: ${uniqueProfiles.size}`));
+      console.log(chalk.green(`   • Duplicates Removed: ${aiAnalysis.analysis.duplicatesRemoved || 0}`));
       console.log(chalk.yellow(`   • Content Validation: ENABLED`));
+      console.log(chalk.yellow(`   • AI Analysis: ENABLED (LinkedIn-specific)`));
       console.log(chalk.yellow(`   • Target Niche: ${niche}`));
       
       if (isInterrupted) {
@@ -190,10 +337,10 @@ async function saveResults(allResults, niche, isInterrupted = false, dataType = 
       }
       
       // Display sample results
-      if (allResults.length > 0) {
-        console.log(chalk.yellow.bold('\n📋 Sample LinkedIn Results:'));
+      if (aiFilteredResults.length > 0) {
+        console.log(chalk.yellow.bold('\n📋 Sample AI-Filtered LinkedIn Results:'));
         console.log(chalk.gray('─'.repeat(60)));
-        allResults.slice(0, 5).forEach((result, index) => {
+        aiFilteredResults.slice(0, 5).forEach((result, index) => {
           console.log(chalk.gray(`${index + 1}. Name: ${result.name}`));
           console.log(chalk.gray(`   Profile: ${result.profileUrl}`));
           if (result.bio) {
@@ -202,8 +349,8 @@ async function saveResults(allResults, niche, isInterrupted = false, dataType = 
           console.log('');
         });
         
-        if (allResults.length > 5) {
-          console.log(chalk.gray(`   ... and ${allResults.length - 5} more profiles`));
+        if (aiFilteredResults.length > 5) {
+          console.log(chalk.gray(`   ... and ${aiFilteredResults.length - 5} more profiles`));
         }
       }
       
@@ -211,12 +358,15 @@ async function saveResults(allResults, niche, isInterrupted = false, dataType = 
       return actualFilename;
     }
     
+    // Apply enhanced deduplication for Google Search results
+    const deduplicatedResults = deduplicateGoogleSearchResults(aiFilteredResults);
+    
     // For Google Search data, handle based on data type selection
     let finalResults = [];
     
     if (dataType === 'emails_only') {
       // Only emails
-      finalResults = allResults
+      finalResults = deduplicatedResults
         .filter(result => result.email)
         .map(result => ({
           email: result.email,
@@ -224,7 +374,7 @@ async function saveResults(allResults, niche, isInterrupted = false, dataType = 
         }));
     } else if (dataType === 'phones_only') {
       // Only phones
-      finalResults = allResults
+      finalResults = deduplicatedResults
         .filter(result => result.phone)
         .map(result => ({
           email: null,
@@ -232,14 +382,14 @@ async function saveResults(allResults, niche, isInterrupted = false, dataType = 
         }));
     } else {
       // Both emails and phones (emails first, then phones)
-      const emailResults = allResults
+      const emailResults = deduplicatedResults
         .filter(result => result.email)
         .map(result => ({
           email: result.email,
           phone: null
         }));
       
-      const phoneResults = allResults
+      const phoneResults = deduplicatedResults
         .filter(result => result.phone)
         .map(result => ({
           email: null,
@@ -249,9 +399,9 @@ async function saveResults(allResults, niche, isInterrupted = false, dataType = 
       finalResults = [...emailResults, ...phoneResults];
     }
 
-    // Get unique counts for summary
-    const uniqueEmails = new Set(allResults.filter(r => r.email).map(r => r.email));
-    const uniquePhones = new Set(allResults.filter(r => r.phone).map(r => r.phone));
+    // Get unique counts for summary (after deduplication)
+    const uniqueEmails = new Set(deduplicatedResults.filter(r => r.email).map(r => r.email));
+    const uniquePhones = new Set(deduplicatedResults.filter(r => r.phone).map(r => r.phone));
 
     // Generate filename
     const filename = niche ? `${niche.replace(/[^a-zA-Z0-9]/g, '_')}_results.txt` : `results_${Date.now()}.txt`;
@@ -274,15 +424,19 @@ async function saveResults(allResults, niche, isInterrupted = false, dataType = 
       throw new Error(`File was not created: ${finalFilename}`);
     }
 
-         // Display summary with validation stats
-     console.log(chalk.blue.bold(`\n📈 ${isInterrupted ? 'Partial' : 'Final'} Scraping Summary:`));
+         // Display summary with validation and deduplication stats
+     console.log(chalk.blue.bold(`\n📈 ${isInterrupted ? 'Partial' : 'Final'} Google Search Scraping Summary:`));
      console.log(chalk.gray('─'.repeat(60)));
      console.log(chalk.green(`   • Total Email Entries: ${allResults.filter(r => r.email).length}`));
      console.log(chalk.green(`   • Total Phone Entries: ${allResults.filter(r => r.phone).length}`));
+     console.log(chalk.green(`   • AI-Filtered Emails: ${aiFilteredResults.filter(r => r.email).length}`));
+     console.log(chalk.green(`   • AI-Filtered Phones: ${aiFilteredResults.filter(r => r.phone).length}`));
      console.log(chalk.green(`   • Unique Emails Found: ${uniqueEmails.size}`));
      console.log(chalk.green(`   • Unique Phones Found: ${uniquePhones.size}`));
      console.log(chalk.green(`   • Final Results: ${finalResults.length} entries`));
      console.log(chalk.yellow(`   • Content Validation: ENABLED`));
+     console.log(chalk.yellow(`   • AI Analysis: ENABLED (Google Search-specific)`));
+     console.log(chalk.yellow(`   • Enhanced Deduplication: ENABLED`));
      console.log(chalk.yellow(`   • Target Niche: ${niche}`));
      console.log(chalk.blue(`   • Output Format: TEXT FILE`));
     
@@ -296,7 +450,7 @@ async function saveResults(allResults, niche, isInterrupted = false, dataType = 
 
     // Display sample results
     if (finalResults.length > 0) {
-      console.log(chalk.yellow.bold('\n📋 Sample Results (Content Validated):'));
+      console.log(chalk.yellow.bold('\n📋 Sample Results (AI-Filtered & Content Validated):'));
       console.log(chalk.gray('─'.repeat(60)));
       finalResults.slice(0, 10).forEach((result, index) => {
         const dataType = result.email ? 'Email' : 'Phone';
@@ -309,7 +463,7 @@ async function saveResults(allResults, niche, isInterrupted = false, dataType = 
       }
     }
 
-    console.log(chalk.green.bold(`\n✅ Validated results saved to: ${finalFilename}`));
+    console.log(chalk.green.bold(`\n✅ AI-filtered and validated results saved to: ${finalFilename}`));
     return finalFilename;
 
   } catch (error) {
@@ -327,12 +481,6 @@ async function processLinkedInSearch(searchQueries, niche, contentValidator) {
   const allResults = [];
   let processedQueries = 0;
   let successfulQueries = 0;
-
-  // Set global state for LinkedIn
-  isProcessing = true;
-  currentResults = [];
-  currentNiche = niche;
-  currentDataType = 'linkedin';
 
   for (const query of searchQueries) {
     processedQueries++;
@@ -375,12 +523,6 @@ async function processLinkedInSearch(searchQueries, niche, contentValidator) {
   console.log(chalk.green(`   • Successful Queries: ${successfulQueries}`));
   console.log(chalk.green(`   • Total LinkedIn Profiles: ${allResults.length}`));
 
-  // Reset global state after processing is complete
-  isProcessing = false;
-  currentResults = [];
-  currentNiche = '';
-  currentDataType = null;
-
   return allResults;
 }
 
@@ -388,7 +530,7 @@ async function processLinkedInSearch(searchQueries, niche, contentValidator) {
  * Process Google Search queries
  */
 async function processGoogleSearch(searchQueries, niche, contentValidator, dataType = 'both') {
-  console.log(chalk.blue(`\n🌐 Processing ${searchQueries.length} Google Search queries...`));
+  console.log(chalk.blue(`\n🌐 Processing ${searchQueries.length} Google Search queries (2 pages each)...`));
   const allResults = [];
   let processedQueries = 0;
   let successfulQueries = 0;
@@ -398,21 +540,14 @@ async function processGoogleSearch(searchQueries, niche, contentValidator, dataT
   // Process each query with content validation
   for (const query of searchQueries) {
     processedQueries++;
-    const querySpinner = ora(chalk.blue(`🔍 Query ${processedQueries}/${searchQueries.length}: "${query}"`)).start();
+    const querySpinner = ora(chalk.blue(`🔍 Query ${processedQueries}/${searchQueries.length}: "${query}" (2 pages)`)).start();
 
     try {
-      // Enhanced Google search with better targeting
-      let searchResults;
-      if (config._userBasedFlow) {
-        // User-based: request 2 pages (20 results)
-        searchResults = [];
-        for (let start = 1; start <= 2; start++) {
-          const pageResults = await searchGoogle(query, 10, (start - 1) * 10 + 1);
-          if (Array.isArray(pageResults)) searchResults.push(...pageResults);
-        }
-      } else {
-        // Global: default (1 page)
-        searchResults = await searchGoogle(query);
+      // Enhanced Google search with better targeting - Always search 2 pages per query
+      let searchResults = [];
+      for (let start = 1; start <= 2; start++) {
+        const pageResults = await searchGoogle(query, 10, (start - 1) * 10 + 1);
+        if (Array.isArray(pageResults)) searchResults.push(...pageResults);
       }
       if (searchResults.length === 0) {
         querySpinner.warn(chalk.yellow(`⚠️  No results for: "${query}"`));
@@ -504,46 +639,102 @@ async function processGoogleSearch(searchQueries, niche, contentValidator, dataT
       querySpinner.fail(chalk.red(`❌ Query "${query}" failed: ${error.message}`));
     }
   }
-  // Deduplicate results
+  // Enhanced deduplication with detailed statistics
   const uniqueResults = deduplicateGoogleSearchResults(allResults);
   const duplicatesRemoved = allResults.length - uniqueResults.length;
+  
   console.log(chalk.blue(`\n📊 Google Search Summary:`));
   console.log(chalk.green(`   • Queries Processed: ${processedQueries}/${searchQueries.length}`));
+  console.log(chalk.green(`   • Pages Per Query: 2 (20 results per query)`));
+  console.log(chalk.green(`   • Total Pages Searched: ${processedQueries * 2}`));
   console.log(chalk.green(`   • Successful Queries: ${successfulQueries}`));
   console.log(chalk.green(`   • Validated Results: ${validatedResults}`));
   console.log(chalk.yellow(`   • Rejected Results: ${rejectedResults}`));
   console.log(chalk.blue(`   • Data Type: ${dataType.replace(/_/g, ' ').toUpperCase()}`));
   console.log(chalk.green(`   • Unique Results: ${uniqueResults.length}`));
   console.log(chalk.yellow(`   • Duplicates Removed: ${duplicatesRemoved}`));
+  console.log(chalk.cyan(`   • Enhanced Deduplication: ENABLED`));
+  console.log(chalk.cyan(`   • AI Analysis: PENDING (will be applied before saving)`));
+  
+  return uniqueResults;
+}
+function deduplicateGoogleSearchResults(results) {
+  const seenEmails = new Set();
+  const seenPhones = new Set();
+  const uniqueResults = [];
+  
+  for (const result of results) {
+    let isDuplicate = false;
+    let normalizedEmail = null;
+    let normalizedPhone = null;
+    
+    // Normalize and check email
+    if (result.email) {
+      normalizedEmail = result.email.toLowerCase().trim();
+      // Remove common email variations
+      normalizedEmail = normalizedEmail.replace(/\+[^@]+@/, '@'); // Remove +tags
+      
+      if (seenEmails.has(normalizedEmail)) {
+        isDuplicate = true;
+      } else {
+        seenEmails.add(normalizedEmail);
+      }
+    }
+    
+    // Normalize and check phone
+    if (result.phone) {
+      normalizedPhone = normalizePhoneNumber(result.phone);
+      
+      if (seenPhones.has(normalizedPhone)) {
+        isDuplicate = true;
+      } else {
+        seenPhones.add(normalizedPhone);
+      }
+    }
+    
+    // Only add if not a duplicate and has valid contact info
+    if (!isDuplicate && (normalizedEmail || normalizedPhone)) {
+      uniqueResults.push({
+        ...result,
+        email: normalizedEmail || result.email,
+        phone: normalizedPhone || result.phone
+      });
+    }
+  }
+  
+  console.log(chalk.cyan(`📊 Deduplication: ${results.length} → ${uniqueResults.length} unique results`));
+  console.log(chalk.gray(`   • Unique emails: ${seenEmails.size}`));
+  console.log(chalk.gray(`   • Unique phones: ${seenPhones.size}`));
+  
   return uniqueResults;
 }
 
 /**
- * Deduplicate Google Search results
- * @param {Array} results - Array of search results
- * @returns {Array} Deduplicated results
+ * Normalize phone number to standard format
  */
-function deduplicateGoogleSearchResults(results) {
-  const seen = new Set();
-  const uniqueResults = [];
+function normalizePhoneNumber(phone) {
+  if (!phone) return null;
   
-  for (const result of results) {
-    let key;
-    if (result.email) {
-      key = `email:${result.email.toLowerCase()}`;
-    } else if (result.phone) {
-      key = `phone:${result.phone}`;
-    } else {
-      continue; // Skip results without email or phone
-    }
-    
-    if (!seen.has(key)) {
-      seen.add(key);
-      uniqueResults.push(result);
-    }
+  // Remove all non-digit characters except +
+  let normalized = phone.replace(/[^\d+]/g, '');
+  
+  // Handle Moroccan phone numbers
+  if (normalized.startsWith('+212')) {
+    return normalized; // Already in international format
+  } else if (normalized.startsWith('212')) {
+    return '+' + normalized; // Add + prefix
+  } else if (normalized.startsWith('0') && normalized.length === 10) {
+    return '+212' + normalized.substring(1); // Convert 0XXXXXXXXX to +212XXXXXXXXX
+  } else if (normalized.length === 9 && (normalized.startsWith('6') || normalized.startsWith('7'))) {
+    return '+212' + normalized; // Convert 6XXXXXXXX or 7XXXXXXXX to +2126XXXXXXXX
   }
   
-  return uniqueResults;
+  // For other international numbers, ensure they start with +
+  if (normalized.startsWith('00')) {
+    return '+' + normalized.substring(2);
+  }
+  
+  return normalized;
 }
 
 /**
@@ -551,6 +742,21 @@ function deduplicateGoogleSearchResults(results) {
  */
 async function main() {
   console.log(chalk.blue.bold('🚀 Universal Morocco Web Scraper Starting...\n'));
+
+  // Set up global error handlers
+  process.on('unhandledRejection', (reason, promise) => {
+    console.error(chalk.red('❌ Unhandled Promise Rejection:'));
+    console.error(chalk.red('Reason:', reason));
+    console.error(chalk.red('Promise:', promise));
+    // Don't exit, just log the error
+  });
+
+  process.on('uncaughtException', (error) => {
+    console.error(chalk.red('❌ Uncaught Exception:'));
+    console.error(chalk.red('Error:', error.message));
+    console.error(chalk.red('Stack:', error.stack));
+    // Don't exit, just log the error
+  });
 
   // Initialize configuration
   await initializeConfig();
@@ -624,37 +830,62 @@ async function main() {
     currentResults = [];
     currentDataType = dataType;
 
+    // Start auto-save functionality
+    startAutoSave();
+
     let allResults = [];
 
     // Process queries based on data source
-    if (dataSource === 'linkedin') {
-      allResults = await processLinkedInSearch(searchQueries, niche, contentValidator);
-    } else if (dataSource === 'google_search') {
-      allResults = await processGoogleSearch(searchQueries, niche, contentValidator, dataType);
-    } else if (dataSource === 'all_sources') {
-      // Process both Google Search and LinkedIn
-      console.log(chalk.blue(`\n🔄 Processing all sources...`));
-      
-      const [googleResults, linkedInResults] = await Promise.all([
-        processGoogleSearch(searchQueries, niche, contentValidator, dataType),
-        processLinkedInSearch(searchQueries, niche, contentValidator)
-      ]);
-      
-      allResults = [...googleResults, ...linkedInResults];
+    try {
+      if (dataSource === 'linkedin') {
+        allResults = await processLinkedInSearch(searchQueries, niche, contentValidator);
+      } else if (dataSource === 'google_search') {
+        allResults = await processGoogleSearch(searchQueries, niche, contentValidator, dataType);
+      } else if (dataSource === 'all_sources') {
+        // Process both Google Search and LinkedIn
+        console.log(chalk.blue(`\n🔄 Processing all sources...`));
+        
+        const [googleResults, linkedInResults] = await Promise.all([
+          processGoogleSearch(searchQueries, niche, contentValidator, dataType),
+          processLinkedInSearch(searchQueries, niche, contentValidator)
+        ]);
+        
+        allResults = [...googleResults, ...linkedInResults];
+      }
+    } catch (processingError) {
+      console.error(chalk.red(`❌ Processing error: ${processingError.message}`));
+      console.error(chalk.gray('Processing error details:', processingError.stack));
+      // Continue with whatever results we have
+      allResults = allResults || [];
     }
 
     // Update final results
     currentResults = allResults;
     isProcessing = false;
 
+    // Stop auto-save
+    stopAutoSave();
+
     // Close readline interface
     rl.close();
 
     // Save validated results
-    if (allResults.length > 0) {
-      await saveResults(allResults, niche, false, dataType);
-    } else {
-      console.log(chalk.yellow('⚠️  No results found to save'));
+    try {
+      if (allResults.length > 0) {
+        await saveResults(allResults, niche, false, dataType);
+      } else {
+        console.log(chalk.yellow('⚠️  No results found to save'));
+      }
+    } catch (saveError) {
+      console.error(chalk.red(`❌ Save error: ${saveError.message}`));
+      console.error(chalk.gray('Save error details:', saveError.stack));
+      // Try to save without AI analysis as fallback
+      try {
+        console.log(chalk.yellow('🔄 Attempting fallback save without AI analysis...'));
+        await saveResultsAutoSave(allResults, niche, dataType);
+      } catch (fallbackError) {
+        console.error(chalk.red(`❌ Fallback save also failed: ${fallbackError.message}`));
+      }
     }
 
     // Display API key stats
@@ -668,6 +899,7 @@ async function main() {
   } catch (error) {
     console.error(chalk.red(`❌ Scraper error: ${error.message}`));
     isProcessing = false;
+    stopAutoSave();
     rl.close();
   }
 }
@@ -677,5 +909,12 @@ async function main() {
 // Run the scraper
 main().catch(error => {
   console.error(chalk.red(`❌ Scraper failed: ${error.message}`));
+  console.error(chalk.gray('Full error stack:', error.stack));
   process.exit(1);
-}); 
+});
+
+// Add a timeout to prevent hanging (30 minutes)
+setTimeout(() => {
+  console.error(chalk.red('❌ Scraper timeout after 30 minutes'));
+  process.exit(1);
+}, 30 * 60 * 1000); 

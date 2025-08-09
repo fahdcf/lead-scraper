@@ -7,7 +7,6 @@
   "scripts": {
     "start": "node scraper.js",
     "scrape": "node scraper.js",
-    "advanced": "node advanced-scraper.js",
     "test": "node test-scraper.js",
     "test-single": "node index.js --queries \"dentiste+Casablanca\"",
     "dev": "node --watch scraper.js",
