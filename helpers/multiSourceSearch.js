@@ -61,15 +61,10 @@ export async function searchLinkedIn(query, niche, onProfileAdded = null) {
     await new Promise(resolve => setTimeout(resolve, delay));
 
     let searchResults = [];
-    if (config._userBasedFlow) {
-      // User-based: fetch 2 pages (20 results)
-      for (let start = 1; start <= 2; start++) {
-        const pageResults = await searchGoogle(enhancedQuery, 10, (start - 1) * 10 + 1);
-        if (Array.isArray(pageResults)) searchResults.push(...pageResults);
-      }
-    } else {
-      // Global: fetch 1 page (10 results)
-      searchResults = await searchGoogle(enhancedQuery, 10);
+    // Always fetch 2 pages (20 results) for both global and user-based flows
+    for (let start = 1; start <= 2; start++) {
+      const pageResults = await searchGoogle(enhancedQuery, 10, (start - 1) * 10 + 1);
+      if (Array.isArray(pageResults)) searchResults.push(...pageResults);
     }
 
     if (searchResults.length === 0) {
@@ -94,6 +89,8 @@ export async function searchLinkedIn(query, niche, onProfileAdded = null) {
         // Extract LinkedIn profile info
         const profileInfo = await extractLinkedInProfileInfo(result.url || result.link, result.title, result.snippet, niche);
         if (profileInfo) {
+          // Attach original query for AI context
+          profileInfo.query = query;
           linkedInProfiles.push(profileInfo);
           console.log(`✅ Added profile: ${profileInfo.name}`);
           // Notify parent about new profile for interruption handling

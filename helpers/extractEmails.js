@@ -138,15 +138,41 @@ function normalizeEmail(email) {
   // Remove common email variations
   normalized = normalized.replace(/\+[^@]+@/, '@'); // Remove +tags
   
-  // Remove common disposable email domains
+  // Remove common disposable email domains and fake emails
   const disposableDomains = [
     '10minutemail.com', 'guerrillamail.com', 'tempmail.org',
-    'mailinator.com', 'throwaway.email', 'temp-mail.org'
+    'mailinator.com', 'throwaway.email', 'temp-mail.org',
+    'example.com', 'domain.com', 'email.com', 'hosting.com',
+    'test.com', 'demo.com', 'sample.com', 'placeholder.com'
+  ];
+  
+  // Remove institutional/educational emails that are not relevant to business niche
+  const institutionalDomains = [
+    // Moroccan institutions
+    'um6p.ma', 'um6ss.ma', 'um5.ma', 'um6.ma', 'um7.ma', 'um8.ma',
+    'ofppt.ma', 'ens.ma', 'enam.ma', 'ena.ma', 'inpt.ma', 'emi.ma',
+    'esith.ma', 'esca.ma', 'escaa.ma', 'uca.ma', 'ucam.ma', 'ucd.ma',
+    'ucm.ma', 'ucf.ma', 'ucg.ma',
+    
+    // Common educational domains worldwide
+    'edu', 'ac', 'school', 'college', 'university', 'institute', 'academy',
+    'ac.ma', 'edu.ma', 'gov.ma', 'gouv.ma', 'ma.ma', 'ma.gov.ma', 'ma.gouv.ma',
+    
+    // Common institutional patterns
+    'campus', 'faculty', 'department', 'division', 'bureau', 'office',
+    'ministry', 'administration', 'service', 'agency', 'authority', 'council',
+    'foundation', 'association', 'society', 'organization', 'corporation'
   ];
   
   const domain = normalized.split('@')[1];
-  if (disposableDomains.includes(domain)) {
-    return ''; // Return empty string to exclude disposable emails
+  
+  // Check if domain contains any institutional keywords
+  const isInstitutional = institutionalDomains.some(institutional => 
+    domain === institutional.toLowerCase()
+  );
+  
+  if (disposableDomains.includes(domain) || isInstitutional) {
+    return ''; // Return empty string to exclude these emails
   }
   
   return normalized;

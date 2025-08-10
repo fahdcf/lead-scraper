@@ -5,6 +5,7 @@ import fs from 'fs';
 import { config } from './config.js';
 
 import './scraper.js';
+import chalk from 'chalk';
 
 const USERS_FILE = 'users.json';
 
@@ -60,9 +61,11 @@ async function main() {
     console.log('Requests for today are done, come back tomorrow.');
     process.exit(0);
   }
-  // Patch config for this run
-  // (already done above)
-  // Just run scraper.js as main, which is interactive
+  
+  console.log(chalk.green(`✅ User ${user.username} authenticated successfully`));
+  console.log(chalk.blue(`🔑 Using ${apiKeys.length} API keys for this session`));
+  console.log(chalk.gray(`📊 Session will process 25 queries with 2 pages each for both LinkedIn and Google searches`));
+  
   // The config will use the user's API keys
   // No need to call any function, just import will run it
 }

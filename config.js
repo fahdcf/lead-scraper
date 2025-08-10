@@ -87,10 +87,10 @@ export const config = {
 
   // HTTP Request Configuration
   http: {
-    timeout: 20000,
+    timeout: 15000, // Reduced from 20s to 15s for faster processing
     userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     acceptLanguage: "en-US,en;q=0.9",
-    delayBetweenRequests: 2000 // 2 seconds delay between requests
+    delayBetweenRequests: 1000 // Reduced from 2s to 1s for faster processing
   },
 
   // Generic Search Query Templates for Any Niche (AI-Powered)

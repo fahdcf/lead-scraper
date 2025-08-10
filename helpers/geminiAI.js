@@ -12,9 +12,10 @@ export async function generateQueriesWithGemini(niche, source = 'google_search',
   try {
     console.log(chalk.cyan(`🤖 Gemini AI: Generating ${source.toUpperCase()} queries for: "${niche}"`));
     console.log(chalk.gray(`   📝 Request type: ${source === 'linkedin' ? 'LinkedIn Profiles' : 'Google Search'}`));
-    if (numLinkedInQueries) {
-      console.log(chalk.gray(`   📊 Requested queries: ${numLinkedInQueries}`));
-    }
+    
+    // Always generate 25 queries for both LinkedIn and Google Search
+    const totalQueries = 25;
+    console.log(chalk.gray(`   📊 Requested queries: ${totalQueries}`));
 
     if (!config.gemini.apiKey) {
       throw new Error('Gemini API key not configured');
@@ -23,37 +24,21 @@ export async function generateQueriesWithGemini(niche, source = 'google_search',
     // Determine language and keyword distribution based on niche and source
     let languageConfig;
     if (source === 'linkedin') {
-      // If numLinkedInQueries is set, distribute as much as possible to French, then Arabic, then Other
-      const { language, frenchCount, arabicCount, otherCount } = detectNicheLanguage(niche);
-      if (numLinkedInQueries) {
-        // Default: French > Arabic > Other
-        let remaining = numLinkedInQueries;
-        let fc = Math.min(remaining, 20); // up to 20 French
-        remaining -= fc;
-        let ac = Math.min(remaining, 5); // up to 5 Arabic
-        remaining -= ac;
-        let oc = Math.max(remaining, 0); // rest Other
-        languageConfig = {
-          language,
-          frenchCount: fc,
-          arabicCount: ac,
-          otherCount: oc
-        };
-      } else {
-        languageConfig = {
-          language,
-          frenchCount: Math.min(frenchCount, 8), // Cap at 8 for LinkedIn
-          arabicCount: Math.min(arabicCount, 2), // Cap at 2 for LinkedIn
-          otherCount: Math.min(otherCount, 2)     // Cap at 2 for LinkedIn
-        };
-      }
-    } else {
-      // Google Search: 25 queries total (20 French, 5 Arabic for Moroccan)
+      // LinkedIn: Always 25 queries (20 French, 5 Arabic)
       const { language, frenchCount, arabicCount, otherCount } = detectNicheLanguage(niche);
       languageConfig = {
         language,
-        frenchCount: 20, // Always 20 for Google Search Moroccan niches
-        arabicCount: 5,  // Always 5 for Google Search Moroccan niches
+        frenchCount: 20, // Always 20 for LinkedIn
+        arabicCount: 5,  // Always 5 for LinkedIn
+        otherCount: 0    // No other languages for LinkedIn
+      };
+    } else {
+      // Google Search: Always 25 queries (20 French, 5 Arabic for Moroccan)
+      const { language, frenchCount, arabicCount, otherCount } = detectNicheLanguage(niche);
+      languageConfig = {
+        language,
+        frenchCount: 20, // Always 20 for Google Search
+        arabicCount: 5,  // Always 5 for Google Search
         otherCount: 0    // No other languages for Google Search
       };
     }
@@ -98,12 +83,23 @@ export async function generateQueriesWithGemini(niche, source = 'google_search',
     // Parse the response to extract queries
     const queries = parseGeneratedQueries(text);
 
-    console.log(chalk.green(`✅ Gemini AI: Generated ${queries.length} optimized ${source} queries`));
-    return queries;
+    // Ensure we have exactly 25 queries
+    if (queries.length < totalQueries) {
+      console.log(chalk.yellow(`   ⚠️  Only got ${queries.length} queries, using fallback for remaining ${totalQueries - queries.length}`));
+      const fallbackQueries = getFallbackQueries(niche, source).slice(0, totalQueries - queries.length);
+      queries.push(...fallbackQueries);
+    }
+
+    // Limit to exactly 25 queries
+    const finalQueries = queries.slice(0, totalQueries);
+    
+    console.log(chalk.green(`✅ Gemini AI: Generated ${finalQueries.length} optimized ${source === 'linkedin' ? 'linkedin' : 'google search'} queries`));
+    return finalQueries;
 
   } catch (error) {
-    console.error(chalk.red(`❌ Gemini AI Error: ${error.message}`));
-    throw error;
+    console.error(chalk.red(`❌ Error generating queries with Gemini: ${error.message}`));
+    console.log(chalk.yellow('⚠️  Using fallback queries'));
+    return getFallbackQueries(niche, source).slice(0, 25); // Always return 25 fallback queries
   }
 }
 
@@ -196,18 +192,24 @@ async function generateGoogleSearchPrompt(niche, language, frenchCount, arabicCo
   
   if (language === 'moroccan') {
     languageInstructions = `
-    Generate exactly ${totalQueries} SEO-optimized search queries for Google Search:
+    Generate EXACTLY ${totalQueries} SEO-optimized search queries for Google Search:
     - ${frenchCount} queries in French (targeting French-speaking Moroccans)
     - ${arabicCount} queries in Arabic (targeting Arabic-speaking Moroccans)
     - ${otherCount} queries in English (for broader reach)
+    
+    CRITICAL: You must return exactly ${totalQueries} queries, no more, no less.
     `;
   } else if (language === 'french') {
     languageInstructions = `
-    Generate exactly ${totalQueries} SEO-optimized search queries in French for Google Search.
+    Generate EXACTLY ${totalQueries} SEO-optimized search queries in French for Google Search.
+    
+    CRITICAL: You must return exactly ${totalQueries} queries, no more, no less.
     `;
   } else {
     languageInstructions = `
-    Generate exactly ${totalQueries} SEO-optimized search queries in ${language} for Google Search.
+    Generate EXACTLY ${totalQueries} SEO-optimized search queries in ${language} for Google Search.
+    
+    CRITICAL: You must return exactly ${totalQueries} queries, no more, no less.
     `;
   }
   
@@ -228,6 +230,7 @@ async function generateGoogleSearchPrompt(niche, language, frenchCount, arabicCo
  - Use natural language that people search for when looking for contact info
  - Mix broad and specific terms for comprehensive coverage
  - Focus on queries that will find pages with contact details, not just general business pages
+ - CRITICAL: Return exactly ${totalQueries} queries
 
  Format: Return only the search queries, one per line, no numbering or extra text.
 
@@ -255,7 +258,8 @@ async function generateGoogleSearchPrompt(niche, language, frenchCount, arabicCo
  restaurant Rabat avis clients contact
  restaurant Rabat spécialités contact
 
- Generate ${totalQueries} SEO-optimized queries for "${niche}" that will find contact pages and contact information:`;
+ CRITICAL: Generate EXACTLY ${totalQueries} SEO-optimized queries for "${niche}" that will find contact pages and contact information:
+ Remember: You must return exactly ${totalQueries} queries, no more, no less.`;
 }
 
 /**
@@ -268,18 +272,24 @@ async function generateLinkedInPrompt(niche, language, frenchCount, arabicCount,
   
   if (language === 'moroccan') {
     languageInstructions = `
-    Generate exactly ${totalQueries} SEO-optimized search queries for LinkedIn:
+    Generate EXACTLY ${totalQueries} SEO-optimized search queries for LinkedIn:
     - ${frenchCount} queries in French (targeting French-speaking professionals)
     - ${arabicCount} queries in Arabic (targeting Arabic-speaking professionals)
     - ${otherCount} queries in English (for broader reach)
+    
+    CRITICAL: You must return exactly ${totalQueries} queries, no more, no less.
     `;
   } else if (language === 'french') {
     languageInstructions = `
-    Generate exactly ${totalQueries} SEO-optimized search queries in French for LinkedIn.
+    Generate EXACTLY ${totalQueries} SEO-optimized search queries in French for LinkedIn.
+    
+    CRITICAL: You must return exactly ${totalQueries} queries, no more, no less.
     `;
   } else {
     languageInstructions = `
-    Generate exactly ${totalQueries} SEO-optimized search queries in ${language} for LinkedIn.
+    Generate EXACTLY ${totalQueries} SEO-optimized search queries in ${language} for LinkedIn.
+    
+    CRITICAL: You must return exactly ${totalQueries} queries, no more, no less.
     `;
   }
   
@@ -299,6 +309,7 @@ Requirements:
 - Use LinkedIn-specific terminology
 - Mix broad and specific terms for comprehensive coverage
 - Focus on high-quality professional results
+- CRITICAL: Return exactly ${totalQueries} queries
 
 Format: Return only the search queries, one per line, no numbering or extra text.
 
@@ -338,7 +349,8 @@ Développeur backend Fès professional
 Freelance developer Fès Morocco
 Développeur freelance Fès LinkedIn
 
-Generate ${totalQueries} SEO-optimized queries for "${niche}":`;
+CRITICAL: Generate EXACTLY ${totalQueries} SEO-optimized queries for "${niche}":
+Remember: You must return exactly ${totalQueries} queries, no more, no less.`;
 }
 
 /**
@@ -448,13 +460,25 @@ export async function analyzeAndFilterData(results, niche, source) {
     }
 
     // Prepare data for analysis
-    const dataToAnalyze = results.map((result, index) => ({
-      id: index + 1,
-      email: result.email || null,
-      phone: result.phone || null,
-      url: result.url || null,
-      query: result.query || null
-    }));
+    const dataToAnalyze = results.map((result, index) => {
+      if (source === 'linkedin') {
+        return {
+          id: index + 1,
+          name: result.name || null,
+          url: result.profileUrl || result.url || null,
+          bio: result.bio || null,
+          query: result.query || null,
+          isCompanyPage: !!result.isCompanyPage
+        };
+      }
+      return {
+        id: index + 1,
+        email: result.email || null,
+        phone: result.phone || null,
+        url: result.url || null,
+        query: result.query || null
+      };
+    });
 
     // Generate analysis prompt based on source
     let prompt;
@@ -493,15 +517,29 @@ export async function analyzeAndFilterData(results, niche, source) {
     const analysisText = response.data.candidates[0].content.parts[0].text;
     
     // Parse the analysis response
-    const analysis = parseDataAnalysis(analysisText, results);
+    const parsed = parseDataAnalysis(analysisText, results);
+
+    // Compute fallback metrics if Gemini omitted them
+    const totalAnalyzed = parsed.analysis?.totalAnalyzed ?? results.length;
+    const removed = parsed.analysis?.removed ?? (results.length - parsed.filteredResults.length);
+    const kept = parsed.analysis?.kept ?? parsed.filteredResults.length;
+
+    const finalAnalysis = {
+      ...parsed.analysis,
+      totalAnalyzed,
+      removed,
+      kept
+    };
 
     console.log(chalk.blue(`   📊 Analysis Summary:`));
-    console.log(chalk.gray(`      • Total analyzed: ${analysis.totalAnalyzed}`));
-    console.log(chalk.gray(`      • Removed: ${analysis.removed}`));
-    console.log(chalk.gray(`      • Kept: ${analysis.kept}`));
-    console.log(chalk.gray(`      • Quality improvement: ${Math.round((analysis.removed / analysis.totalAnalyzed) * 100)}%`));
+    console.log(chalk.gray(`      • Total analyzed: ${finalAnalysis.totalAnalyzed}`));
+    console.log(chalk.gray(`      • Removed: ${finalAnalysis.removed}`));
+    console.log(chalk.gray(`      • Kept: ${finalAnalysis.kept}`));
 
-    return analysis;
+    return {
+      filteredResults: parsed.filteredResults,
+      analysis: finalAnalysis
+    };
 
   } catch (error) {
     console.error(chalk.red(`❌ Error in AI data analysis: ${error.message}`));
@@ -532,23 +570,32 @@ function generateGoogleSearchAnalysisPrompt(data, niche) {
 
 TASK: Filter out contacts that are NOT relevant to the target business niche. Focus on business contact information quality and relevance.
 
+⚠️ AGGRESSIVE FILTERING REQUIRED: Be very strict about removing institutional, educational, government, and fake emails. When in doubt, REMOVE the contact. Only keep contacts that are clearly legitimate business contacts in the target niche.
+
 DETAILED FILTERING CRITERIA (remove if ANY apply):
 
-1. **Obvious Spam/Test Emails**:
+1. **Obvious Spam/Test/Fake Emails**:
    - email@example.com, test@test.com, youremail@yourhosting.com
    - Obvious fake or placeholder emails
    - Disposable email domains (10minutemail.com, temp-mail.org, etc.)
+   - ANY email with domains: example.com, domain.com, email.com, mail.com, hosting.com, test.com, demo.com, sample.com, placeholder.com, temporary.com, fake.com, dummy.com, invalid.com, nonexistent.com
+   - ANY email starting with: test@, demo@, sample@, example@, fake@, dummy@, admin@, root@, webmaster@, info@, contact@, hello@
 
 2. **Malformed Contact Information**:
    - Emails that don't follow basic email format (missing @, invalid characters)
    - Phone numbers with suspicious patterns (666666666, 999999999, 000000000)
    - Phone numbers that are clearly fake or test numbers
+   - Emails starting with only numbers
+   - Emails with suspicious domain patterns
 
 3. **Institutional/Educational Contacts** (NOT related to target business):
    - Schools, universities, government agencies unrelated to the business niche
    - Training institutions (like OFPPT) not directly related to the target business
    - Academic institutions that don't serve the target business type
    - Government agencies that don't provide business services
+   - ANY email with domains: um6p.ma, um6ss.ma, um5.ma, um6.ma, um7.ma, um8.ma, ofppt.ma, ens.ma, enam.ma, ena.ma, inpt.ma, emi.ma, esith.ma, esca.ma, escaa.ma, uca.ma, ucam.ma, ucd.ma, ucm.ma, ucf.ma, ucg.ma, edu.ma, ac.ma, gov.ma, gouv.ma, ma.ma, ma.gov.ma, ma.gouv.ma
+   - ANY email containing: edu, ac, school, college, university, institute, academy, campus, faculty, department, division, bureau, office, ministry, administration, service, agency, authority, council, foundation, association, society, organization, corporation
+   - UNLESS the niche is specifically related to education, healthcare (for medical universities), or government services
 
 4. **Completely Irrelevant Business Contacts**:
    - Contacts from completely different industries
@@ -571,6 +618,7 @@ IMPORTANT FILTERING RULES:
 - Generic names that could be legitimate professionals (e.g., stephane.roochard@gmail.com)
 - Business domains that might be related to the niche
 - Contact information from legitimate business websites
+- Institutional contacts that directly provide business services in the target niche
 
 ❌ REMOVE these contacts:
 - Test/placeholder emails and phone numbers
@@ -583,10 +631,14 @@ EXAMPLES FOR NICHE "dentists in Casablanca":
 
 REMOVE:
 - contact@ofppt.ma (training institution - not dental business)
-- email@example.com (test email)
+- email@example.com (test email - fake domain)
+- test@test.com (test email - fake domain)
+- contact@domain.com (fake domain)
 - +212666666666 (suspicious phone pattern)
 - info@university.edu (university - not dental business)
 - contact@restaurant.com (different industry)
+- contact@um6p.ma (university - not dental business)
+- info@ofppt.ma (training institution - not dental business)
 
 KEEP:
 - stephane.roochard@gmail.com (could be legitimate dentist)
@@ -594,6 +646,8 @@ KEEP:
 - contact@dentalclinic.ma (dental clinic - directly related)
 - info@dentalassociation.ma (dental association - directly related)
 - contact@localbusiness.ma (could be dental business)
+- contact@medicaluniversity.ma (if providing dental services)
+- info@dentalinstitute.ma (if providing dental services)
 
 DATA TO ANALYZE:
 ${JSON.stringify(data, null, 2)}
@@ -636,80 +690,41 @@ function generateLinkedInAnalysisPrompt(data, niche) {
 
   return `You are a LinkedIn profile quality analyst specializing in professional networking data. Analyze the following LinkedIn profile data for the niche "${niche}".
 
-TASK: Filter out LinkedIn profiles that are NOT relevant to the target business niche AND remove duplicate profiles. Focus on professional relevance and profile uniqueness.
+TASK: Keep profiles that are relevant to the user's niche request. ONLY remove (1) duplicate profiles and (2) profiles clearly unrelated to the requested niche.
 
-DETAILED FILTERING CRITERIA (remove if ANY apply):
+IMPORTANT: Be conservative. If a profile might be relevant, KEEP it. Do not penalize for being a student, intern, or having a short bio. Company pages are VALID.
 
-1. **Duplicate Profile Detection**:
-   - Multiple profiles for the same person (check name similarity and company)
+MINIMAL FILTERING CRITERIA (remove only if ANY apply):
+
+1. Duplicate Profile Detection:
+   - Multiple profiles for the same person (name + company/title strongly match)
    - Same LinkedIn URL with different variations
-   - Profiles with identical or very similar professional information
-   - Keep the most complete/updated profile, remove duplicates
+   - Keep the most complete/recent profile, remove duplicates
 
-2. **Professional Relevance to Target Niche**:
-   - Profiles from completely different industries
-   - Students or interns not yet in the target profession
-   - Retired professionals no longer active in the field
-   - Profiles with no connection to the target business type
-   - Generic business profiles with no specific expertise
+2. Unrelated to Target Niche:
+   - Profiles from a completely different industry with no clear connection to the niche
+   - Profiles whose bio/title explicitly indicates a different domain
+   - Generic pages (e.g., international organizations) with no relation to the niche
 
-3. **Profile Quality Issues**:
-   - Incomplete profiles with minimal information
-   - Profiles with no professional experience listed
-   - Profiles that appear to be fake or spam
-   - Profiles with suspicious or inconsistent information
+Location Guidance (soft):
+   - If the niche includes a location (e.g., a city), prefer local profiles but DO NOT remove unless the profile is clearly in a different country and unrelated.
 
-4. **Geographic Mismatch** (if niche specifies location):
-   - Profiles from completely different regions/countries
-   - International professionals with no local connection
-   - Remote workers not serving the target area
+Do NOT remove for these reasons:
+   - Being a student/intern/junior
+   - Minimal or short bio
+   - Limited profile details
+   - Company page instead of individual
 
-5. **Institutional/Educational Profiles** (NOT related to target business):
-   - Academic profiles unrelated to the business niche
-   - Student profiles not yet in the profession
-   - Training institution profiles not serving the business
-   - Government profiles not related to business services
+KEEP examples:
+ - Active professionals in the target niche
+ - Relevant company pages in the niche
+ - Students/interns in the niche field
+ - Local or nearby professionals (if location mentioned)
 
-IMPORTANT FILTERING RULES:
-
-✅ KEEP these profiles:
-- Active professionals in the target niche
-- Business owners and entrepreneurs in the target field
-- Industry experts and consultants
-- Medical professionals for healthcare niches
-- Relevant institutional profiles (e.g., medical universities for dentists)
-- Complete profiles with relevant experience
-- Local professionals serving the target area
-
-❌ REMOVE these profiles:
-- Duplicate profiles (keep the best one)
-- Irrelevant industry professionals
-- Incomplete or low-quality profiles
-- Geographic mismatches (if location-specific)
-- Institutional profiles unrelated to the business
-
-DUPLICATE DETECTION STRATEGY:
-- Compare names, companies, and professional titles
-- Look for similar URLs or profile information
-- Check for multiple profiles of the same person
-- Keep the most complete and recent profile
-- Remove older or less complete duplicates
-
-EXAMPLES FOR NICHE "dentists in Casablanca":
-
-REMOVE:
-- Duplicate profiles of the same dentist
-- Software developer profiles (different industry)
-- Student profiles not yet practicing
-- International dentists not serving Casablanca
-- Generic business profiles with no dental connection
-
-KEEP:
-- Active dentists in Casablanca
-- Dental clinic owners and managers
-- Dental specialists and consultants
-- Medical university faculty (relevant for dental field)
-- Complete profiles with dental experience
+REMOVE examples:
+ - Duplicate profiles
+ - Profiles clearly from a different industry/domain
+ - Irrelevant international organizations unrelated to the niche
 
 DATA TO ANALYZE:
 ${JSON.stringify(data, null, 2)}
@@ -726,20 +741,20 @@ RESPONSE FORMAT (JSON only):
   "removedItems": [
     {
       "id": number,
-      "reason": "detailed reason for removal (duplicate/inrelevant/quality issue)"
+      "reason": "duplicate or unrelated (state why)"
     }
   ],
   "keptItems": [
     {
       "id": number,
       "confidence": "high/medium/low",
-      "reason": "why this profile is relevant and unique"
+      "reason": "why this profile is relevant"
     }
   ],
-  "summary": "comprehensive analysis including duplicate detection and quality insights"
+  "summary": "clear summary of what was kept and removed"
 }
 
-Analyze each LinkedIn profile thoroughly for relevance, quality, and uniqueness. Respond with valid JSON only.`;
+Analyze each LinkedIn profile for niche relevance and duplicate detection only. Respond with valid JSON only.`;
 }
 
 /**
@@ -747,27 +762,57 @@ Analyze each LinkedIn profile thoroughly for relevance, quality, and uniqueness.
  */
 function parseDataAnalysis(analysisText, originalResults) {
   try {
-    // Extract JSON from the response
-    const jsonMatch = analysisText.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
+    // Try to extract JSON block
+    let jsonString = null;
+    const jsonMatch = analysisText.match(/\{[\s\S]*\}$/);
+    if (jsonMatch) {
+      jsonString = jsonMatch[0];
+    } else {
+      // Fallback: attempt to fix common formatting issues
+      const startIdx = analysisText.indexOf('{');
+      const endIdx = analysisText.lastIndexOf('}');
+      if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
+        jsonString = analysisText.slice(startIdx, endIdx + 1);
+      }
+    }
+    if (!jsonString) {
       throw new Error('No JSON found in response');
     }
 
-    const analysis = JSON.parse(jsonMatch[0]);
-    
-    // Create filtered results
-    const removedIds = new Set(analysis.removedItems.map(item => item.id));
-    const filteredResults = originalResults.filter((_, index) => !removedIds.has(index + 1));
+    let analysis;
+    try {
+      analysis = JSON.parse(jsonString);
+    } catch (e) {
+      // Attempt to remove trailing commas and parse again
+      const cleaned = jsonString.replace(/,\s*([}\]])/g, '$1');
+      analysis = JSON.parse(cleaned);
+    }
+
+    const removedItems = Array.isArray(analysis.removedItems) ? analysis.removedItems : [];
+    const keptItems = Array.isArray(analysis.keptItems) ? analysis.keptItems : [];
+
+    // Build filtered results by excluding removed IDs; if keptItems provided, prefer that
+    let filteredResults;
+    if (keptItems.length > 0) {
+      const keptIds = new Set(keptItems.map(item => item.id));
+      filteredResults = originalResults.filter((_, idx) => keptIds.has(idx + 1));
+    } else if (removedItems.length > 0) {
+      const removedIds = new Set(removedItems.map(item => item.id));
+      filteredResults = originalResults.filter((_, idx) => !removedIds.has(idx + 1));
+    } else {
+      filteredResults = originalResults;
+    }
 
     return {
       filteredResults,
       analysis: {
-        totalAnalyzed: analysis.analysis.totalAnalyzed,
-        removed: analysis.analysis.removed,
-        kept: analysis.analysis.kept,
-        qualityScore: analysis.analysis.qualityScore,
-        reasons: analysis.removedItems.map(item => item.reason),
-        summary: analysis.summary
+        totalAnalyzed: analysis.analysis?.totalAnalyzed,
+        removed: analysis.analysis?.removed,
+        kept: analysis.analysis?.kept,
+        qualityScore: analysis.analysis?.qualityScore,
+        reasons: removedItems.map(item => item.reason).filter(Boolean),
+        summary: analysis.summary,
+        duplicatesRemoved: analysis.analysis?.duplicatesRemoved
       }
     };
 

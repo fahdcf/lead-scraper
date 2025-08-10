@@ -166,10 +166,10 @@ async function performAutoSave() {
     console.log(chalk.yellow(`\n💾 Auto-saving ${currentResults.length} results...`));
     
     if (currentDataType === 'linkedin' || (currentResults.length > 0 && currentResults[0].name && currentResults[0].profileUrl)) {
-      // Auto-save LinkedIn results
-      const { exportLinkedInToExcel } = await import('./helpers/exportToCsv.js');
+      // Auto-save LinkedIn results (deduplicated)
+      const { exportLinkedInResults } = await import('./helpers/exportToCsv.js');
       const filename = `${currentNiche.replace(/[^a-zA-Z0-9]/g, '_')}_linkedin_results_autosave.xlsx`;
-      await exportLinkedInToExcel(currentResults, currentNiche, filename);
+      await exportLinkedInResults(currentResults, 'xlsx', filename);
       console.log(chalk.green(`✅ Auto-saved LinkedIn results to: ${filename}`));
     } else {
       // Auto-save Google Search results (without AI analysis for speed)
@@ -257,8 +257,8 @@ async function handleGlobalInterruption() {
       if (currentDataType === 'linkedin' || (currentResults.length > 0 && currentResults[0].name && currentResults[0].profileUrl)) {
         // Save LinkedIn partial results
         console.log(chalk.blue(`💾 Saving ${currentResults.length} LinkedIn profiles...`));
-        const { exportLinkedInToExcel } = await import('./helpers/exportToCsv.js');
-        const filename = await exportLinkedInToExcel(currentResults, currentNiche);
+        const { exportLinkedInResults } = await import('./helpers/exportToCsv.js');
+        const filename = await exportLinkedInResults(currentResults, 'xlsx');
         console.log(chalk.green(`✅ LinkedIn partial results saved to: ${filename}`));
       } else {
         // Save Google Search partial results
@@ -478,9 +478,35 @@ async function saveResults(allResults, niche, isInterrupted = false, dataType = 
 async function processLinkedInSearch(searchQueries, niche, contentValidator) {
   console.log(chalk.blue(`\n🔗 Processing ${searchQueries.length} LinkedIn queries...`));
   
-  const allResults = [];
+  const rawProfilesAll = [];
+  const finalValidatedProfiles = [];
   let processedQueries = 0;
   let successfulQueries = 0;
+  let validatedCount = 0;
+  let rejectedCount = 0;
+  const BATCH_SIZE = 60;
+  let pendingBatch = [];
+
+  // Helper to validate current batch with Gemini
+  async function validatePendingBatch() {
+    if (pendingBatch.length === 0) return;
+    const batchSize = pendingBatch.length;
+    const validationSpinner = ora(chalk.blue(`🤖 Validating ${batchSize} LinkedIn profiles with Gemini AI (batch)...`)).start();
+    try {
+      const aiAnalysis = await analyzeAndFilterData(pendingBatch, niche, 'linkedin');
+      const filtered = aiAnalysis.filteredResults || [];
+      finalValidatedProfiles.push(...filtered);
+      validatedCount += filtered.length;
+      rejectedCount += (batchSize - filtered.length);
+      validationSpinner.succeed(chalk.green(`✅ Gemini AI validation done: kept ${filtered.length}, removed ${batchSize - filtered.length}`));
+    } catch (e) {
+      validationSpinner.warn(chalk.yellow(`⚠️  Gemini AI validation error: ${e.message}. Keeping all ${batchSize} profiles.`));
+      finalValidatedProfiles.push(...pendingBatch);
+      validatedCount += pendingBatch.length;
+    } finally {
+      pendingBatch = [];
+    }
+  }
 
   for (const query of searchQueries) {
     processedQueries++;
@@ -489,17 +515,17 @@ async function processLinkedInSearch(searchQueries, niche, contentValidator) {
     try {
       // Search LinkedIn profiles with callback for real-time updates
       const linkedInResults = await searchLinkedIn(query, niche, (profileInfo) => {
-        // Add profile to allResults and update global state immediately
+        // Keep raw profile list for live updates/autosave
         if (profileInfo && profileInfo.name) {
-          const profileData = {
+          rawProfilesAll.push({
             name: profileInfo.name,
             profileUrl: profileInfo.profileUrl,
             bio: profileInfo.bio,
             source: 'linkedin',
-            isCompanyPage: profileInfo.isCompanyPage
-          };
-          allResults.push(profileData);
-          currentResults = allResults; // Update global state immediately
+            isCompanyPage: profileInfo.isCompanyPage,
+            query: profileInfo.query || query
+          });
+          currentResults = rawProfilesAll; // Update global state immediately
         }
       });
       
@@ -508,7 +534,22 @@ async function processLinkedInSearch(searchQueries, niche, contentValidator) {
         continue;
       }
 
-      querySpinner.text = chalk.blue(`👥 Processing ${linkedInResults.length} LinkedIn profiles for: "${query}"`);
+      // Add to batch for AI validation (accumulate across queries)
+      for (const p of linkedInResults) {
+        pendingBatch.push({
+          name: p.name,
+          profileUrl: p.profileUrl,
+          bio: p.bio,
+          source: 'linkedin',
+          isCompanyPage: p.isCompanyPage,
+          query: p.query || query
+        });
+      }
+
+      // Validate in batches of 60 to reduce API calls
+      if (pendingBatch.length >= BATCH_SIZE) {
+        await validatePendingBatch();
+      }
 
       querySpinner.succeed(chalk.green(`✅ LinkedIn query "${query}" completed - Found ${linkedInResults.length} profiles`));
       successfulQueries++;
@@ -518,12 +559,20 @@ async function processLinkedInSearch(searchQueries, niche, contentValidator) {
     }
   }
 
+  // Validate any remaining profiles in the last batch
+  if (pendingBatch.length > 0) {
+    await validatePendingBatch();
+  }
+
   console.log(chalk.blue(`\n📊 LinkedIn Search Summary:`));
   console.log(chalk.green(`   • Queries Processed: ${processedQueries}/${searchQueries.length}`));
   console.log(chalk.green(`   • Successful Queries: ${successfulQueries}`));
-  console.log(chalk.green(`   • Total LinkedIn Profiles: ${allResults.length}`));
+  console.log(chalk.green(`   • Total LinkedIn Profiles (raw): ${rawProfilesAll.length}`));
+  console.log(chalk.green(`   • Validated Profiles (kept): ${validatedCount}`));
+  console.log(chalk.yellow(`   • Rejected Profiles (removed): ${rejectedCount}`));
 
-  return allResults;
+  // Return AI-validated profiles for final export
+  return finalValidatedProfiles;
 }
 
 /**
@@ -545,9 +594,14 @@ async function processGoogleSearch(searchQueries, niche, contentValidator, dataT
     try {
       // Enhanced Google search with better targeting - Always search 2 pages per query
       let searchResults = [];
+      // Parallel page fetching for better performance
+      const pagePromises = [];
       for (let start = 1; start <= 2; start++) {
-        const pageResults = await searchGoogle(query, 10, (start - 1) * 10 + 1);
-        if (Array.isArray(pageResults)) searchResults.push(...pageResults);
+        pagePromises.push(searchGoogle(query, 10, (start - 1) * 10 + 1));
+      }
+      const pageResults = await Promise.all(pagePromises);
+      for (const result of pageResults) {
+        if (Array.isArray(result)) searchResults.push(...result);
       }
       if (searchResults.length === 0) {
         querySpinner.warn(chalk.yellow(`⚠️  No results for: "${query}"`));
@@ -563,71 +617,93 @@ async function processGoogleSearch(searchQueries, niche, contentValidator, dataT
       let queryResults = 0;
       let queryValidated = 0;
       let queryRejected = 0;
-      // Process each URL with content validation
-      for (let i = 0; i < filteredUrls.length; i++) {
-        const urlData = filteredUrls[i];
-        const url = urlData.url;
-        querySpinner.text = chalk.blue(`🌐 Scraping (${i + 1}/${filteredUrls.length}): ${url} (Score: ${urlData.score})`);
-        // Enhanced page fetching with retry logic
-        let html = null;
-        for (let retry = 0; retry < 2; retry++) {
-          html = await fetchPage(url);
-          if (html) break;
-          if (retry < 1) {
-            await delay(config.http.delayBetweenRequests);
+      // Process URLs in batches for better performance
+      const batchSize = 3; // Process 3 URLs concurrently
+      for (let i = 0; i < filteredUrls.length; i += batchSize) {
+        const batch = filteredUrls.slice(i, i + batchSize);
+        const batchPromises = batch.map(async (urlData, batchIndex) => {
+          const url = urlData.url;
+          const globalIndex = i + batchIndex;
+          querySpinner.text = chalk.blue(`🌐 Scraping (${globalIndex + 1}/${filteredUrls.length}): ${url} (Score: ${urlData.score})`);
+          
+          // Enhanced page fetching with retry logic
+          let html = null;
+          for (let retry = 0; retry < 2; retry++) {
+            html = await fetchPage(url);
+            if (html) break;
+            if (retry < 1) {
+              await delay(config.http.delayBetweenRequests / 2); // Reduced delay for batch processing
+            }
           }
-        }
-        if (!html) {
-          console.log(chalk.red(`❌ Failed to fetch: ${url}`));
-          continue;
-        }
-        // Content validation before extraction
-        const validation = contentValidator.validateContent(html, url);
-        if (!validation.isRelevant) {
-          queryRejected++;
-          rejectedResults++;
-          console.log(chalk.yellow(`⚠️  Content rejected: ${url} (Score: ${validation.score})`));
-          console.log(chalk.gray(`   Reasons: ${validation.reasons.join(', ')}`));
-          continue;
-        }
-        // Enhanced email and phone extraction
-        const emails = extractEmails(html);
-        const phones = extractPhones(html);
-        // Validate extracted contact data
-        const contactValidation = contentValidator.validateContactData(emails, phones, url);
-        // Add validated results based on data type selection
-        if (dataType === 'emails_only' || dataType === 'both') {
-          contactValidation.validEmails.forEach(email => {
-            allResults.push({
-              email: email.toLowerCase(),
-              phone: null,
-              url: url,
-              query: query,
-              score: urlData.score,
-              validationScore: validation.score,
-              source: 'google_search'
+          
+          if (!html) {
+            console.log(chalk.red(`❌ Failed to fetch: ${url}`));
+            return null;
+          }
+          
+          // Content validation before extraction
+          const validation = contentValidator.validateContent(html, url);
+          if (!validation.isRelevant) {
+            queryRejected++;
+            rejectedResults++;
+            console.log(chalk.yellow(`⚠️  Content rejected: ${url} (Score: ${validation.score})`));
+            console.log(chalk.gray(`   Reasons: ${validation.reasons.join(', ')}`));
+            return null;
+          }
+          
+          // Enhanced email and phone extraction
+          const emails = extractEmails(html);
+          const phones = extractPhones(html);
+          
+          // Validate extracted contact data
+          const contactValidation = contentValidator.validateContactData(emails, phones, url);
+          
+          const results = [];
+          
+          // Add validated results based on data type selection
+          if (dataType === 'emails_only' || dataType === 'both') {
+            contactValidation.validEmails.forEach(email => {
+              results.push({
+                email: email.toLowerCase(),
+                phone: null,
+                url: url,
+                query: query,
+                score: urlData.score,
+                validationScore: validation.score,
+                source: 'google_search'
+              });
             });
-          });
-          queryValidated += contactValidation.validEmails.length;
-          validatedResults += contactValidation.validEmails.length;
-        }
-        if (dataType === 'phones_only' || dataType === 'both') {
-          contactValidation.validPhones.forEach(phone => {
-            allResults.push({
-              email: null,
-              phone: phone,
-              url: url,
-              query: query,
-              score: urlData.score,
-              validationScore: validation.score,
-              source: 'google_search'
+            queryValidated += contactValidation.validEmails.length;
+            validatedResults += contactValidation.validEmails.length;
+          }
+          
+          if (dataType === 'phones_only' || dataType === 'both') {
+            contactValidation.validPhones.forEach(phone => {
+              results.push({
+                email: null,
+                phone: phone,
+                url: url,
+                query: query,
+                score: urlData.score,
+                validationScore: validation.score,
+                source: 'google_search'
+              });
             });
-          });
-          queryValidated += contactValidation.validPhones.length;
-          validatedResults += contactValidation.validPhones.length;
+            queryValidated += contactValidation.validPhones.length;
+            validatedResults += contactValidation.validPhones.length;
+          }
+          
+          return results;
+        });
+        
+        // Wait for batch to complete
+        const batchResults = await Promise.all(batchPromises);
+        for (const result of batchResults) {
+          if (result) allResults.push(...result);
         }
-        // Enhanced delay between requests
-        if (i < filteredUrls.length - 1) {
+        
+        // Delay between batches (reduced for better performance)
+        if (i + batchSize < filteredUrls.length) {
           await delay(config.http.delayBetweenRequests);
         }
       }
@@ -802,23 +878,17 @@ async function main() {
     let searchQueries;
     try {
       if (dataSource === 'linkedin') {
-        if (config._userBasedFlow) {
-          // User-based: request 25 queries from Gemini
-          searchQueries = await generateQueriesWithGemini(niche, 'linkedin', 25);
-        } else {
-          searchQueries = await generateQueriesWithGemini(niche, 'linkedin');
-        }
+        // Always request 25 queries for LinkedIn
+        searchQueries = await generateQueriesWithGemini(niche, 'linkedin', 25);
       } else {
-        searchQueries = await generateQueriesWithGemini(niche, 'google_search');
+        // Always request 25 queries for Google Search
+        searchQueries = await generateQueriesWithGemini(niche, 'google_search', 25);
       }
       spinner.succeed(chalk.green(`✅ Generated ${searchQueries.length} AI-powered queries`));
     } catch (error) {
       console.log(chalk.yellow('⚠️  AI query generation failed, using fallback queries'));
-      if (dataSource === 'linkedin' && config._userBasedFlow) {
-        searchQueries = config.searchQueries.slice(0, 25); // Use first 25 fallback queries for user-based LinkedIn
-      } else {
-        searchQueries = config.searchQueries.slice(0, 10); // Use first 10 fallback queries
-      }
+      // Always use 25 fallback queries
+      searchQueries = config.searchQueries.slice(0, 25);
     }
 
     console.log(chalk.yellow(`📋 Processing ${searchQueries.length} enhanced queries...`));
@@ -872,7 +942,14 @@ async function main() {
     // Save validated results
     try {
       if (allResults.length > 0) {
-        await saveResults(allResults, niche, false, dataType);
+        if (allResults[0].name && allResults[0].profileUrl) {
+          // LinkedIn: export with deduplication
+          const { exportLinkedInResults } = await import('./helpers/exportToCsv.js');
+          const finalFilename = await exportLinkedInResults(allResults, 'xlsx', `${niche.replace(/[^a-zA-Z0-9]/g, '_')}_linkedin_results.xlsx`);
+          console.log(chalk.green.bold(`\n✅ LinkedIn results saved to: ${finalFilename}`));
+        } else {
+          await saveResults(allResults, niche, false, dataType);
+        }
       } else {
         console.log(chalk.yellow('⚠️  No results found to save'));
       }
@@ -905,16 +982,14 @@ async function main() {
 }
 
 // Run the scraper
-
-// Run the scraper
 main().catch(error => {
   console.error(chalk.red(`❌ Scraper failed: ${error.message}`));
   console.error(chalk.gray('Full error stack:', error.stack));
   process.exit(1);
 });
 
-// Add a timeout to prevent hanging (30 minutes)
-setTimeout(() => {
-  console.error(chalk.red('❌ Scraper timeout after 30 minutes'));
-  process.exit(1);
-}, 30 * 60 * 1000); 
+// Remove the timeout - let the scraper run until completion
+// setTimeout(() => {
+//   console.error(chalk.red('❌ Scraper timeout after 30 minutes'));
+//   process.exit(1);
+// }, 30 * 60 * 1000);
